@@ -1,0 +1,45 @@
+# GNU Radio auto-generated files
+# (Regenerate from .grc files as needed)
+std_t98_rf_backend.py
+std_t98_rf_backend_epy_block_*.py
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+venv/
+env/
+ENV/
+
+# IDE and editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build and distribution
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Archive (development/experimental code)
+archive/
+
+# Output files (if any)
+output.ambe
+*.ambe

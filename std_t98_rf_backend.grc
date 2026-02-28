@@ -1,0 +1,1154 @@
+options:
+  parameters:
+    author: ''
+    catch_exceptions: 'True'
+    category: '[GRC Hier Blocks]'
+    cmake_opt: ''
+    comment: ''
+    copyright: ''
+    description: ''
+    gen_cmake: 'On'
+    gen_linking: dynamic
+    generate_options: no_gui
+    hier_block_src_path: '.:'
+    id: std_t98_rf_backend
+    max_nouts: '0'
+    output_language: python
+    placement: (0,0)
+    qt_qss_theme: ''
+    realtime_scheduling: ''
+    run: 'True'
+    run_command: '{python} -u {filename}'
+    run_options: run
+    sizing_mode: fixed
+    thread_safe_setters: ''
+    title: STD-T98 RF Backend
+    window_size: (1000,1000)
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [8, 8]
+    rotation: 0
+    state: enabled
+
+blocks:
+- name: Fs
+  id: variable
+  parameters:
+    comment: ''
+    value: samp_rate/decimation
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [552, 16.0]
+    rotation: 0
+    state: enabled
+- name: decimation
+  id: variable
+  parameters:
+    comment: ''
+    value: '10'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [424, 16.0]
+    rotation: 0
+    state: enabled
+- name: deltaF
+  id: variable
+  parameters:
+    comment: ''
+    value: '315'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [656, 24.0]
+    rotation: 0
+    state: enabled
+- name: err_offset
+  id: variable
+  parameters:
+    comment: ''
+    value: '-340'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [976, 24.0]
+    rotation: 0
+    state: enabled
+- name: freq
+  id: variable
+  parameters:
+    comment: ''
+    value: 351.2e6
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [304, 16.0]
+    rotation: 0
+    state: enabled
+- name: offset
+  id: variable
+  parameters:
+    comment: ''
+    value: 50e3
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [864, 24.0]
+    rotation: 0
+    state: enabled
+- name: samp_rate
+  id: variable
+  parameters:
+    comment: ''
+    value: 960e3
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [184, 12]
+    rotation: 0
+    state: enabled
+- name: sps
+  id: variable
+  parameters:
+    comment: ''
+    value: '40'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [760, 24.0]
+    rotation: 0
+    state: enabled
+- name: analog_pwr_squelch_xx_0
+  id: analog_pwr_squelch_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha: '1'
+    comment: ''
+    gate: 'False'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    ramp: '0'
+    threshold: '-25'
+    type: complex
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1016, 184.0]
+    rotation: 0
+    state: enabled
+- name: analog_quadrature_demod_cf_0
+  id: analog_quadrature_demod_cf
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    gain: Fs/(2*math.pi*deltaF)
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [528, 464.0]
+    rotation: 0
+    state: enabled
+- name: blocks_freqshift_cc_0
+  id: blocks_freqshift_cc
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    freq: offset
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    sample_rate: samp_rate
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [560, 200.0]
+    rotation: 0
+    state: enabled
+- name: blocks_multiply_const_vxx_0
+  id: blocks_multiply_const_vxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    const: '0.23'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: float
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1008, 464.0]
+    rotation: 0
+    state: enabled
+- name: blocks_multiply_const_vxx_1
+  id: blocks_multiply_const_vxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    const: '5'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: float
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1568, 416.0]
+    rotation: 0
+    state: enabled
+- name: blocks_throttle2_0
+  id: blocks_throttle2
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    ignoretag: 'True'
+    limit: auto
+    maximum: '0.1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samples_per_second: samp_rate
+    type: complex
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [360, 200.0]
+    rotation: 0
+    state: enabled
+- name: digital_symbol_sync_xx_0
+  id: digital_symbol_sync_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    constellation: digital.constellation_bpsk().base()
+    damping: '1.1'
+    loop_bw: '0.06'
+    max_dev: '0.02'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    nfilters: '128'
+    osps: '1'
+    pfb_mf_taps: '[]'
+    resamp_type: digital.IR_MMSE_8TAP
+    sps: '40'
+    ted_gain: '0.1'
+    ted_type: digital.TED_GARDNER
+    type: ff
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1232, 404.0]
+    rotation: 0
+    state: enabled
+- name: epy_block_0
+  id: epy_block
+  parameters:
+    _source_code: "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n\nimport numpy\
+      \ as np\nfrom gnuradio import gr\nimport pmt\n\nclass sync_word_correlator(gr.sync_block):\n\
+      \    \"\"\"\n    \u5165\u529B: float32 \u30B9\u30C8\u30EA\u30FC\u30E0\uFF08\u30B7\
+      \u30F3\u30DC\u30EB\u7CFB\u5217\uFF09\n    \u51FA\u529B(\u30E1\u30C3\u30BB\u30FC\
+      \u30B8): \"packet_out\"\uFF08PDU: f32vector, \u9577\u3055 packet_len\uFF09\n\
+      \    \u4ED5\u69D8: \u76F8\u95A2\u304C\u95BE\u5024\u4EE5\u4E0A\u306B\u306A\u3063\
+      \u305F\u3089\u3001\u305D\u306E\u6642\u70B9\u306E\u7A93\uFF08\u540C\u671F\u30EF\
+      \u30FC\u30C9\u9577\uFF09\u3092\u5148\u982D\u306B\u636E\u3048\u3001\n       \
+      \   \u4EE5\u5F8C\u306E\u30B7\u30F3\u30DC\u30EB\u3092\u8DB3\u3057\u3066 packet_len\
+      \ \u306B\u9054\u3057\u305F\u3089 PDU \u3068\u3057\u3066\u9001\u51FA\u3059\u308B\
+      \u3002\n          \u307E\u305F\u3001\u5165\u529B\u30B7\u30F3\u30DC\u30EB\u306E\
+      \u7570\u5E38\u5024\u3092\u30AF\u30EA\u30C3\u30D4\u30F3\u30B0\u3057\u3066\u8AA4\
+      \u691C\u51FA\u3092\u9632\u3050\u3002\n    \"\"\"\n    def __init__(self,\n \
+      \                sync_word=None,\n                 threshold_ratio=0.9,\n  \
+      \               packet_len=192,\n                 abs_limit=4.0):  # \u8FFD\u52A0\
+      : \u30B7\u30F3\u30DC\u30EB\u306E\u7D76\u5BFE\u5024\u306E\u4E0A\u9650\n     \
+      \   gr.sync_block.__init__(\n            self,\n            name=\"Sync Word\
+      \ Correlator\",\n            in_sig=[np.float32],\n            out_sig=None\
+      \  # \u30B9\u30C8\u30EA\u30FC\u30E0\u51FA\u529B\u306F\u306A\u3044\n        )\n\
+      \n        if sync_word is None:\n            sync_word = [-3.0, +1.0, -3.0,\
+      \ +3.0, -3.0, -3.0, +3.0, +3.0, -1.0, +3.0]\n        self.sync_word = np.asarray(sync_word,\
+      \ dtype=np.float32)\n        self.sw_len = len(self.sync_word)\n\n        sw_energy\
+      \ = float(np.dot(self.sync_word, self.sync_word))\n        self.correlation_threshold\
+      \ = sw_energy * float(threshold_ratio)\n\n        self.shift_register = np.zeros(self.sw_len,\
+      \ dtype=np.float32)\n\n        self.packet_len = int(packet_len)\n        if\
+      \ self.packet_len < self.sw_len:\n            raise ValueError(\"packet_len\
+      \ must be >= length of sync_word\")\n        self.collecting = False\n     \
+      \   self.packet_buf = None\n        self.samples_collected = 0\n\n        #\
+      \ \u8FFD\u52A0: \u5165\u529B\u30B7\u30F3\u30DC\u30EB\u306E\u30AF\u30EA\u30C3\
+      \u30D4\u30F3\u30B0\u95BE\u5024\n        self.abs_limit = float(abs_limit)\n\n\
+      \        self.message_port_register_out(pmt.intern(\"packet_out\"))\n\n    def\
+      \ _start_collection(self, initial_window):\n        self.packet_buf = np.empty(self.packet_len,\
+      \ dtype=np.float32)\n        self.packet_buf[:self.sw_len] = initial_window\n\
+      \        self.samples_collected = self.sw_len\n        self.collecting = True\n\
+      \n    def _append_symbol(self, s):\n        if not self.collecting:\n      \
+      \      return\n        if self.samples_collected < self.packet_len:\n      \
+      \      self.packet_buf[self.samples_collected] = float(s)\n            self.samples_collected\
+      \ += 1\n        if self.samples_collected >= self.packet_len:\n            #\
+      \ PDU\uFF08meta \u306F\u7A7A\u8F9E\u66F8\uFF09\u3067\u51FA\u529B\n         \
+      \   meta = pmt.make_dict()\n            payload = pmt.init_f32vector(self.packet_len,\
+      \ self.packet_buf.tolist())\n            self.message_port_pub(pmt.intern(\"\
+      packet_out\"), pmt.cons(meta, payload))\n            # \u30EA\u30BB\u30C3\u30C8\
+      \n            self.collecting = False\n            self.packet_buf = None\n\
+      \            self.samples_collected = 0\n\n    def work(self, input_items, output_items):\n\
+      \        in_data = input_items[0]\n        nread = len(in_data)\n\n        for\
+      \ i in range(nread):\n            x = float(in_data[i])\n\n            # ---\
+      \ \u3053\u3053\u304B\u3089\u304C\u4FEE\u6B63\u70B9 ---\n            # \u5165\
+      \u529B\u30B7\u30F3\u30DC\u30EB\u306E\u5024\u304C\u7570\u5E38\u306B\u5927\u304D\
+      \u3044\u5834\u5408\u306F\u30AF\u30EA\u30C3\u30D4\u30F3\u30B0\u3059\u308B\u3002\
+      \n            # \u3053\u308C\u306B\u3088\u308A\u3001\u30CE\u30A4\u30BA\u306B\
+      \u3088\u308B\u6975\u7AEF\u306A\u5024\u304C\u76F8\u95A2\u5024\u306B\u5F71\u97FF\
+      \u3092\u4E0E\u3048\u308B\u306E\u3092\u9632\u3050\u3002\n            if x > self.abs_limit:\n\
+      \                x = self.abs_limit\n            elif x < -self.abs_limit:\n\
+      \                x = -self.abs_limit\n            # --- \u4FEE\u6B63\u70B9\u3053\
+      \u3053\u307E\u3067 ---\n\n            # \u30D1\u30B1\u30C3\u30C8\u53CE\u96C6\
+      \u4E2D\u304B\u3069\u3046\u304B\u3067\u51E6\u7406\u3092\u5206\u5C90\n       \
+      \     if self.collecting:\n                self._append_symbol(x)\n        \
+      \    else:\n                # \u540C\u671F\u30EF\u30FC\u30C9\u63A2\u7D22\u4E2D\
+      \n                # \u30B7\u30D5\u30C8\u30EC\u30B8\u30B9\u30BF\u66F4\u65B0\n\
+      \                self.shift_register[:-1] = self.shift_register[1:]\n      \
+      \          self.shift_register[-1] = x\n\n                # \u76F8\u95A2\u5024\
+      \u8A08\u7B97\n                corr = float(np.dot(self.shift_register, self.sync_word))\n\
+      \n                # \u95BE\u5024\u5224\u5B9A\n                if corr >= self.correlation_threshold:\n\
+      \                    self._start_collection(self.shift_register.copy())\n  \
+      \      \n        # \u6D88\u8CBB\u3057\u305F\u5165\u529B\u30B5\u30F3\u30D7\u30EB\
+      \u6570\u3092\u8FD4\u3059\n        return nread"
+    abs_limit: '4.0'
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    packet_len: '192'
+    sync_word: '[-3.0, +1.0, -3.0, +3.0, -3.0, -3.0, +3.0, +3.0, -1.0, +3.0]'
+    threshold_ratio: '0.85'
+  states:
+    _io_cache: "('Sync Word Correlator', 'sync_word_correlator', [('sync_word', 'None'),\
+      \ ('threshold_ratio', '0.9'), ('packet_len', '192'), ('abs_limit', '4.0')],\
+      \ [('0', 'float', 1)], [('packet_out', 'message', 1)], '\\n\u5165\u529B: float32\
+      \ \u30B9\u30C8\u30EA\u30FC\u30E0\uFF08\u30B7\u30F3\u30DC\u30EB\u7CFB\u5217\uFF09\
+      \\n\u51FA\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"packet_out\"\uFF08PDU: f32vector,\
+      \ \u9577\u3055 packet_len\uFF09\\n\u4ED5\u69D8: \u76F8\u95A2\u304C\u95BE\u5024\
+      \u4EE5\u4E0A\u306B\u306A\u3063\u305F\u3089\u3001\u305D\u306E\u6642\u70B9\u306E\
+      \u7A93\uFF08\u540C\u671F\u30EF\u30FC\u30C9\u9577\uFF09\u3092\u5148\u982D\u306B\
+      \u636E\u3048\u3001\\n      \u4EE5\u5F8C\u306E\u30B7\u30F3\u30DC\u30EB\u3092\u8DB3\
+      \u3057\u3066 packet_len \u306B\u9054\u3057\u305F\u3089 PDU \u3068\u3057\u3066\
+      \u9001\u51FA\u3059\u308B\u3002\\n      \u307E\u305F\u3001\u5165\u529B\u30B7\u30F3\
+      \u30DC\u30EB\u306E\u7570\u5E38\u5024\u3092\u30AF\u30EA\u30C3\u30D4\u30F3\u30B0\
+      \u3057\u3066\u8AA4\u691C\u51FA\u3092\u9632\u3050\u3002\\n', ['abs_limit', 'packet_len',\
+      \ 'sync_word'])"
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [296, 672.0]
+    rotation: 0
+    state: enabled
+- name: epy_block_1
+  id: epy_block
+  parameters:
+    _source_code: "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n\nimport numpy\
+      \ as np\nfrom gnuradio import gr\nimport pmt\n\nclass pdu_f32_passthrough(gr.basic_block):\n\
+      \    \"\"\"\n    \u5165\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"in\"  \uFF08\
+      PDU: f32vector\uFF09\n    \u51FA\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"out\"\
+      \ \uFF08PDU: f32vector\uFF09\n    \u4ED5\u69D8: \u5165\u529B\u306Efloat\u5024\
+      \u3092\u305D\u306E\u307E\u307E\u51FA\u529B\u3057\u307E\u3059\u3002\n       \
+      \  enforce_len \u304C\u6307\u5B9A\u3055\u308C\u3066\u3044\u308B\u5834\u5408\u3001\
+      \u9577\u3055\u306E\u30C1\u30A7\u30C3\u30AF\u307E\u305F\u306F\u30AF\u30EA\u30C3\
+      \u30D7\u3092\u884C\u3044\u307E\u3059\u3002\n    \"\"\"\n    def __init__(self,\
+      \ enforce_len=192, action=\"clip\"):\n        gr.basic_block.__init__(self,\
+      \ name=\"pdu_f32_passthrough\",\n                                in_sig=[],\
+      \ out_sig=[])\n        self.message_port_register_in(pmt.intern(\"in\"))\n \
+      \       self.message_port_register_out(pmt.intern(\"out\"))\n        self.set_msg_handler(pmt.intern(\"\
+      in\"), self._handle_pdu)\n\n        self.enforce_len = int(enforce_len)\n  \
+      \      self.action = str(action)\n        \n        # \u30CF\u30FC\u30C9\u5224\
+      \u5B9A\u7528\u306E\u30EC\u30D9\u30EB\u8A2D\u5B9A(_levels)\u306F\u524A\u9664\u3057\
+      \u307E\u3057\u305F\n\n    # _slice_indices \u30E1\u30BD\u30C3\u30C9\u306F\u4E0D\
+      \u8981\u306A\u305F\u3081\u524A\u9664\u3057\u307E\u3057\u305F\n\n    def _handle_pdu(self,\
+      \ pdu):\n        # PDU(pair) \u4EE5\u5916\u306F\u6368\u3066\u308B\n        if\
+      \ not pmt.is_pair(pdu):\n            return\n        meta = pmt.car(pdu)\n \
+      \       vec  = pmt.cdr(pdu)\n        \n        # f32vector \u4EE5\u5916\u306F\
+      \u6368\u3066\u308B\n        if not pmt.is_f32vector(vec):\n            return\n\
+      \n        # numpy \u914D\u5217\u306B\u5909\u63DB (float32)\n        arr = np.asarray(pmt.f32vector_elements(vec),\
+      \ dtype=np.float32)\n\n        n = arr.size\n        if n == 0:\n          \
+      \  return\n\n        # \u9577\u3055\u306E\u6271\u3044\uFF08clip / reject \u306E\
+      \u51E6\u7406\uFF09\n        if self.enforce_len > 0 and n != self.enforce_len:\n\
+      \            if self.action == \"reject\":\n                # \u9577\u3055\u304C\
+      \u5408\u308F\u306A\u3044\u5834\u5408\u306F\u30D1\u30B1\u30C3\u30C8\u3092\u7834\
+      \u68C4\n                return\n            elif self.action == \"clip\":\n\
+      \                # \u6307\u5B9A\u9577\u3088\u308A\u9577\u3044\u5834\u5408\u306F\
+      \u5207\u308A\u8A70\u3081\u3001\u77ED\u3044\u5834\u5408\u306F\u305D\u306E\u307E\
+      \u307E\uFF08\u3042\u308B\u3044\u306F\u30D1\u30C7\u30A3\u30F3\u30B0\u304C\u5FC5\
+      \u8981\u306A\u3089\u5225\u9014\u5B9F\u88C5\uFF09\n                # \u3053\u3053\
+      \u3067\u306F\u5143\u306E\u30ED\u30B8\u30C3\u30AF\u306B\u5F93\u3044\u3001\u9577\
+      \u3044\u5834\u5408\u306E\u307F\u5207\u308A\u8A70\u3081\u308B\u6319\u52D5\u3068\
+      \u306A\u308A\u307E\u3059\n                if n > self.enforce_len:\n       \
+      \             arr = arr[:self.enforce_len]\n                # \u77ED\u3044\u5834\
+      \u5408\u3092\u3069\u3046\u3059\u308B\u304B\u306F\u8981\u4EF6\u6B21\u7B2C\u3067\
+      \u3059\u304C\u3001\u3053\u3053\u3067\u306F\u4F55\u3082\u3057\u307E\u305B\u3093\
+      \n        \n        # --- \u5909\u66F4\u70B9 ---\n        # \u30B9\u30E9\u30A4\
+      \u30B9(\u30CF\u30FC\u30C9\u5224\u5B9A)\u3092\u884C\u308F\u305A\u3001float\u5024\
+      \u3092\u305D\u306E\u307E\u307E\u30DA\u30A4\u30ED\u30FC\u30C9\u306B\u3059\u308B\
+      \n        \n        # f32vector \u3092\u4F5C\u6210\uFF08List[float] \u3092\u6E21\
+      \u3059\uFF09\n        # arr.tolist() \u3067 Python \u306E float \u30EA\u30B9\
+      \u30C8\u306B\u5909\u63DB\u3057\u3066\u304B\u3089 PMT \u3092\u4F5C\u6210\n  \
+      \      payload = pmt.init_f32vector(int(arr.size), arr.tolist())\n\n       \
+      \ # \u30E1\u30BF\u306F\u7A7A\u8F9E\u66F8\u3067\u7D71\u4E00\uFF08\u5143\u306E\
+      \u30B3\u30FC\u30C9\u306E\u6319\u52D5\u3092\u7DAD\u6301\uFF09\n        # \u5FC5\
+      \u8981\u3067\u3042\u308C\u3070 input \u306E meta \u3092\u305D\u306E\u307E\u307E\
+      \u4F7F\u3063\u3066\u304F\u3060\u3055\u3044: out_meta = meta\n        out_meta\
+      \ = pmt.make_dict()\n\n        # PDU \u3067\u9001\u51FA\n        self.message_port_pub(pmt.intern(\"\
+      out\"), pmt.cons(out_meta, payload))"
+    action: '"reject"'
+    affinity: ''
+    alias: ''
+    comment: ''
+    enforce_len: '192'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    _io_cache: "('pdu_f32_passthrough', 'pdu_f32_passthrough', [('enforce_len', '192'),\
+      \ ('action', \"'clip'\")], [('in', 'message', 1)], [('out', 'message', 1)],\
+      \ '\\n\u5165\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"in\"  \uFF08PDU: f32vector\uFF09\
+      \\n\u51FA\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"out\" \uFF08PDU: f32vector\uFF09\
+      \\n\u4ED5\u69D8: \u5165\u529B\u306Efloat\u5024\u3092\u305D\u306E\u307E\u307E\
+      \u51FA\u529B\u3057\u307E\u3059\u3002\\n     enforce_len \u304C\u6307\u5B9A\u3055\
+      \u308C\u3066\u3044\u308B\u5834\u5408\u3001\u9577\u3055\u306E\u30C1\u30A7\u30C3\
+      \u30AF\u307E\u305F\u306F\u30AF\u30EA\u30C3\u30D7\u3092\u884C\u3044\u307E\u3059\
+      \u3002\\n', ['action', 'enforce_len'])"
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1200, 776.0]
+    rotation: 0
+    state: disabled
+- name: epy_block_1_0
+  id: epy_block
+  parameters:
+    _source_code: "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n\nimport numpy\
+      \ as np\nfrom gnuradio import gr\nimport pmt\n\nclass pdu_f32_hardslice_to_u8(gr.basic_block):\n\
+      \    \"\"\"\n    \u5165\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"in\"  \uFF08\
+      PDU: f32vector\uFF09\n    \u51FA\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"out\"\
+      \ \uFF08PDU: u8vector, \u5404\u8981\u7D20\u306F 0,1,2,3\uFF09\n    \u4ED5\u69D8\
+      : \u6700\u8FD1\u508D\u306E4\u5024 {-3,-1,1,3} \u306B\u3088\u308B\u30CF\u30FC\
+      \u30C9\u5224\u5B9A\u3067\u30A4\u30F3\u30C7\u30C3\u30AF\u30B9 0..3 \u3092\u51FA\
+      \u529B\u3002\n         PDU\u30DA\u30A2\u306E\u307F\u53D7\u7406\u3002\u578B\u304C\
+      \u9055\u3046\u30FB\u7A7A\u30FB\u305D\u306E\u4ED6\u4E0D\u6574\u5408\u306F\u9759\
+      \u304B\u306B\u6368\u3066\u308B\u3002\n    \"\"\"\n    def __init__(self, enforce_len=192,\
+      \ action=\"clip\"):\n        gr.basic_block.__init__(self, name=\"pdu_f32_hardslice_to_u8\"\
+      ,\n                                in_sig=[], out_sig=[])\n        self.message_port_register_in(pmt.intern(\"\
+      in\"))\n        self.message_port_register_out(pmt.intern(\"out\"))\n      \
+      \  self.set_msg_handler(pmt.intern(\"in\"), self._handle_pdu)\n\n        self.enforce_len\
+      \ = int(enforce_len)\n        self.action = str(action)\n\n        self._levels\
+      \ = np.asarray([+1.0, +3.0, -1.0, -3.0], dtype=np.float32)\n\n    def _slice_indices(self,\
+      \ arr_f32):\n        diff = arr_f32[:, None] - self._levels[None, :]\n     \
+      \   idx = np.argmin(diff * diff, axis=1).astype(np.uint8)  # 0..3\n        return\
+      \ idx\n\n    def _handle_pdu(self, pdu):\n        # PDU(pair) \u4EE5\u5916\u306F\
+      \u6368\u3066\u308B\n        if not pmt.is_pair(pdu):\n            return\n \
+      \       meta = pmt.car(pdu)\n        vec  = pmt.cdr(pdu)\n        if not pmt.is_f32vector(vec):\n\
+      \            return\n\n        # --- \u4FEE\u6B63\u70B9 ---\n        # f32vector\
+      \ \u304B\u3089 numpy \u914D\u5217\u306B\u5909\u63DB\u3059\u308B\u969B\u3001\
+      dtype\u3092float32\u306E\u307E\u307E\u306B\u3059\u308B\n        arr = np.asarray(pmt.f32vector_elements(vec),\
+      \ dtype=np.float32)\n        # --- \u3053\u3053\u307E\u3067 ---\n\n        n\
+      \ = arr.size\n        if n == 0:\n            return\n\n        # \u9577\u3055\
+      \u306E\u6271\u3044\uFF08clip / reject \u306E\u6700\u5C0F\u9650\u306E\u307F\uFF09\
+      \n        if self.enforce_len > 0 and n != self.enforce_len:\n            if\
+      \ self.action == \"reject\":\n                return\n            elif self.action\
+      \ == \"clip\":\n                arr = arr[:self.enforce_len]\n        \n   \
+      \     # \u6B63\u3057\u3044\u6D6E\u52D5\u5C0F\u6570\u70B9\u6570\u306E\u914D\u5217\
+      \u3067\u30B9\u30E9\u30A4\u30B9\u51E6\u7406\u3092\u5B9F\u884C\n        idx =\
+      \ self._slice_indices(arr)  # uint8, 0..3\n        \n        # \u65B0\u3057\u3044\
+      PDU\u306E\u30DA\u30A4\u30ED\u30FC\u30C9\u9577\u3092\u6C7A\u5B9A\n        payload_len\
+      \ = idx.size\n\n        # u8vector \u3092\u4F5C\u6210\uFF08List[int] \u3092\u6E21\
+      \u3059\uFF09\n        payload = pmt.init_u8vector(int(payload_len), idx.tolist())\n\
+      \n        # \u30E1\u30BF\u306F\u7A7A\u8F9E\u66F8\u3067\u7D71\u4E00\uFF08\u6700\
+      \u5C0F\u69CB\u6210\uFF09\n        out_meta = pmt.make_dict()\n\n        # PDU\
+      \ \u3067\u9001\u51FA\n        self.message_port_pub(pmt.intern(\"out\"), pmt.cons(out_meta,\
+      \ payload))"
+    action: '"reject"'
+    affinity: ''
+    alias: ''
+    comment: ''
+    enforce_len: '192'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    _io_cache: "('pdu_f32_hardslice_to_u8', 'pdu_f32_hardslice_to_u8', [('enforce_len',\
+      \ '192'), ('action', \"'clip'\")], [('in', 'message', 1)], [('out', 'message',\
+      \ 1)], '\\n\u5165\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"in\"  \uFF08PDU:\
+      \ f32vector\uFF09\\n\u51FA\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"out\" \uFF08\
+      PDU: u8vector, \u5404\u8981\u7D20\u306F 0,1,2,3\uFF09\\n\u4ED5\u69D8: \u6700\
+      \u8FD1\u508D\u306E4\u5024 {-3,-1,1,3} \u306B\u3088\u308B\u30CF\u30FC\u30C9\u5224\
+      \u5B9A\u3067\u30A4\u30F3\u30C7\u30C3\u30AF\u30B9 0..3 \u3092\u51FA\u529B\u3002\
+      \\n     PDU\u30DA\u30A2\u306E\u307F\u53D7\u7406\u3002\u578B\u304C\u9055\u3046\
+      \u30FB\u7A7A\u30FB\u305D\u306E\u4ED6\u4E0D\u6574\u5408\u306F\u9759\u304B\u306B\
+      \u6368\u3066\u308B\u3002\\n', ['action', 'enforce_len'])"
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1192, 696.0]
+    rotation: 0
+    state: disabled
+- name: epy_block_2
+  id: epy_block
+  parameters:
+    _source_code: "\"\"\"\nSync Word Detection using Correlation and Peak Output\n\
+      \"\"\"\n\nimport numpy as np\nfrom gnuradio import gr\n\nclass sync_word_correlator(gr.sync_block):\n\
+      \    \"\"\"\n    Looks for a specific sync word in a float stream using correlation.\n\
+      \    It continuously calculates and outputs the correlation value (dot product)\n\
+      \    between the sync word and the current window of symbols.\n    It also prints\
+      \ a message when the correlation is above a threshold,\n    indicating a peak.\n\
+      \    \"\"\"\n    def __init__(self, \n                 abs_limit=4.0):\n   \
+      \     gr.sync_block.__init__(self,\n            name = \"Sync Word Correlator\"\
+      ,\n            in_sig = [np.float32],\n            out_sig = [np.float32]) #\
+      \ \u51FA\u529B\u3082float\u578B\n        # \u691C\u51FA\u3057\u305F\u3044\u540C\
+      \u671F\u30EF\u30FC\u30C9 (\u30C6\u30F3\u30D7\u30EC\u30FC\u30C8)\n        # \u8A08\
+      \u7B97\u52B9\u7387\u306E\u305F\u3081\u306BNumpy\u914D\u5217\u306B\u5909\u63DB\
+      \u3057\u3066\u304A\u304F\n        self.sync_word = np.array([-3.0, +1.0, -3.0,\
+      \ +3.0, -3.0, -3.0, +3.0, +3.0, -1.0, +3.0], dtype=np.float32)\n\n        #\
+      \ \u30D4\u30FC\u30AF\u3068\u307F\u306A\u3059\u305F\u3081\u306E\u76F8\u95A2\u5024\
+      \u306E\u95BE\u5024\n        # \u5B8C\u5168\u306B\u4E00\u81F4\u3057\u305F\u5834\
+      \u5408\u306E\u81EA\u5DF1\u76F8\u95A2\u5024\u306F sum(sync_word[i]^2) = 74.0\
+      \ \u3068\u306A\u308B\n        # \u3053\u3053\u3067\u306F\u3001\u81EA\u5DF1\u76F8\
+      \u95A2\u5024\u306E90%\u3092\u95BE\u5024\u3068\u3057\u3066\u8A2D\u5B9A\u3059\u308B\
+      \n        self.correlation_threshold = np.dot(self.sync_word, self.sync_word)\
+      \ * 0.9 \n        \n        # \u30B7\u30D5\u30C8\u30EC\u30B8\u30B9\u30BF\u3092\
+      Numpy\u914D\u5217\u3068\u3057\u3066\u521D\u671F\u5316\n        self.shift_register\
+      \ = np.zeros(len(self.sync_word), dtype=np.float32)\n\n        self.abs_limit\
+      \ = float(abs_limit)\n\n    def work(self, input_items, output_items):\n   \
+      \     # input_items[0] \u306F\u5165\u529B\u30B9\u30C8\u30EA\u30FC\u30E0\u30C7\
+      \u30FC\u30BF (Numpy\u914D\u5217)\n        # output_items[0] \u306F\u51FA\u529B\
+      \u30B9\u30C8\u30EA\u30FC\u30E0\u30C7\u30FC\u30BF (Numpy\u914D\u5217)\n     \
+      \   in_data = input_items[0]\n        out_data = output_items[0]\n\n       \
+      \ # \u5165\u529B\u3055\u308C\u305F\u5404\u30B7\u30F3\u30DC\u30EB\u3092\u4E00\
+      \u3064\u305A\u3064\u51E6\u7406\n        for i in range(len(in_data)):\n    \
+      \        current_symbol = in_data[i]\n\n            # \u5165\u529B\u30B7\u30F3\
+      \u30DC\u30EB\u306E\u5024\u304C\u7570\u5E38\u306B\u5927\u304D\u3044\u5834\u5408\
+      \u306F\u30AF\u30EA\u30C3\u30D4\u30F3\u30B0\u3059\u308B\u3002\n            #\
+      \ \u3053\u308C\u306B\u3088\u308A\u3001\u30CE\u30A4\u30BA\u306B\u3088\u308B\u6975\
+      \u7AEF\u306A\u5024\u304C\u76F8\u95A2\u5024\u306B\u5F71\u97FF\u3092\u4E0E\u3048\
+      \u308B\u306E\u3092\u9632\u3050\u3002\n            if current_symbol > self.abs_limit:\n\
+      \                current_symbol = self.abs_limit\n            elif current_symbol\
+      \ < -self.abs_limit:\n                current_symbol = -self.abs_limit\n   \
+      \         \n            # \u30B7\u30D5\u30C8\u30EC\u30B8\u30B9\u30BF\u3092\u66F4\
+      \u65B0 (np.roll\u306F\u52B9\u7387\u7684\u306A\u30B7\u30D5\u30C8\u64CD\u4F5C\
+      )\n            # 1. \u914D\u5217\u5168\u4F53\u3092\u5DE6\u306B1\u3064\u5FAA\u74B0\
+      \u30B7\u30D5\u30C8\n            self.shift_register = np.roll(self.shift_register,\
+      \ -1)\n            # 2. \u672B\u5C3E\u306E\u8981\u7D20(\u3082\u3068\u3082\u3068\
+      \u5148\u982D\u306B\u3042\u3063\u305F\u53E4\u3044\u5024)\u3092\u65B0\u3057\u3044\
+      \u30B7\u30F3\u30DC\u30EB\u3067\u4E0A\u66F8\u304D\n            self.shift_register[-1]\
+      \ = current_symbol\n\n            # --- \u3053\u3053\u304C\u91CD\u8981\u306A\
+      \u5909\u66F4\u70B9 ---\n            # \u73FE\u5728\u306E\u30B7\u30D5\u30C8\u30EC\
+      \u30B8\u30B9\u30BF\u3068\u540C\u671F\u30EF\u30FC\u30C9\u3068\u306E\u76F8\u95A2\
+      \ (\u5185\u7A4D) \u3092\u8A08\u7B97\n            correlation_value = np.dot(self.shift_register,\
+      \ self.sync_word)\n            \n            # \u8A08\u7B97\u3057\u305F\u76F8\
+      \u95A2\u5024\u3092\u51FA\u529B\u30B9\u30C8\u30EA\u30FC\u30E0\u306B\u66F8\u304D\
+      \u8FBC\u3080\n            out_data[i] = correlation_value\n            \n  \
+      \      # \u51E6\u7406\u3057\u305F (\u305D\u3057\u3066\u51FA\u529B\u3057\u305F\
+      ) \u30A2\u30A4\u30C6\u30E0\u6570\u3092\u8FD4\u3059\n        return len(out_data)"
+    abs_limit: '4.0'
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+  states:
+    _io_cache: ('Sync Word Correlator', 'sync_word_correlator', [('abs_limit', '4.0')],
+      [('0', 'float', 1)], [('0', 'float', 1)], '\nLooks for a specific sync word
+      in a float stream using correlation.\nIt continuously calculates and outputs
+      the correlation value (dot product)\nbetween the sync word and the current window
+      of symbols.\nIt also prints a message when the correlation is above a threshold,\nindicating
+      a peak.\n', ['abs_limit'])
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1208, 888.0]
+    rotation: 0
+    state: disabled
+- name: fft_filter_xxx_0
+  id: fft_filter_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    decim: '1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    nthreads: '1'
+    samp_delay: '0'
+    taps: '[-4.65537794980264e-07, -5.05292007346725e-07, -5.41911958862329e-07, -5.74309069634182e-07,
+      -6.0135340618217e-07, -6.21887750185124e-07, -6.34743457794684e-07, -6.38757001070189e-07,
+      -6.32788385246386e-07, -6.15740077591909e-07, -5.86577414196654e-07, -5.44348608855216e-07,
+      -4.88206239879219e-07, -4.17428083210325e-07, -3.31437775002996e-07, -2.29825403152972e-07,
+      -1.12366912219386e-07, 2.09575272691609e-08, 1.69946574146707e-07, 3.34162564286089e-07,
+      5.12918575168442e-07, 7.05267609646398e-07, 9.0999509438916e-07, 1.1256136076554e-06,
+      1.35036168558145e-06, 1.58220507273654e-06, 1.81884331595938e-06, 2.0577183477144e-06,
+      2.2960282421991e-06, 2.53074540523812e-06, 2.75863726528769e-06, 2.9762927624688e-06,
+      3.18015190714505e-06, 3.36653988597391e-06, 3.5317038964422e-06, 3.67185543836968e-06,
+      3.7832126054127e-06, 3.86204919777811e-06, 3.90474315281608e-06, 3.90782770409714e-06,
+      3.86804549634689e-06, 3.78240224563342e-06, 3.64822017218103e-06, 3.46319257005234e-06,
+      3.22543701258837e-06, 2.93354582936445e-06, 2.5866354462778e-06, 2.18439186028263e-06,
+      1.72711224877276e-06, 1.21574237255118e-06, 6.51908294457826e-07, 3.79419589080499e-08,
+      -6.23099424501561e-07, -1.3274217280923e-06, -2.07048992706405e-06, -2.84703264696873e-06,
+      -3.65105483979278e-06, -4.47586126028909e-06, -5.31408613824169e-06, -6.15773706158507e-06,
+      -6.99824386174441e-06, -7.82651932240697e-06, -8.63303193909815e-06, -9.407877769263e-06,
+      -1.0140878657694e-05, -1.08216681837803e-05, -1.1439800800872e-05, -1.1984862794634e-05,
+      -1.24465850603883e-05, -1.28149658848997e-05, -1.30803964566439e-05, -1.32337900140556e-05,
+      -1.32667082652915e-05, -1.31714923554682e-05, -1.29413874674356e-05, -1.25706728795194e-05,
+      -1.20547765618539e-05, -1.13903925011982e-05, -1.05755862023216e-05, -9.60989109444199e-06,
+      -8.49439493322279e-06, -7.23181437933818e-06, -5.82655457037617e-06, -4.28475323133171e-06,
+      -2.61431068793172e-06, -8.24899757390085e-07, 1.07204164123686e-06, 3.06333799926506e-06,
+      5.13412351210718e-06, 7.26790904082009e-06, 9.44667317526182e-06, 1.16509700092138e-05,
+      1.38600616992335e-05, 1.60520685312804e-05, 1.82041403604671e-05, 2.0292647604947e-05,
+      2.22933904296951e-05, 2.41818197537214e-05, 2.59332828136394e-05, 2.75232687272364e-05,
+      2.89276777039049e-05, 3.0123093893053e-05, 3.10870600515045e-05, 3.17983613058459e-05,
+      3.2237312552752e-05, 3.23860331263859e-05, 3.22287269227672e-05, 3.17519443342462e-05,
+      3.09448478219565e-05, 2.97994338325225e-05, 2.83107783616288e-05, 2.64772170339711e-05,
+      2.43005306401756e-05, 2.17860942939296e-05, 1.89429902093252e-05, 1.57840931933606e-05,
+      1.23261261251173e-05, 8.58966359373881e-06, 4.59910597783164e-06, 3.82613450256031e-07,
+      -4.02801060772617e-06, -8.59747160575353e-06, -1.32871809910284e-05, -1.80555016413564e-05,
+      -2.2858028387418e-05, -2.76479167951038e-05, -3.23762469633948e-05, -3.69924346159678e-05,
+      -4.1444662201684e-05, -4.56803645647597e-05, -4.96467218908947e-05, -5.32911944901571e-05,
+      -5.65620794077404e-05, -5.94090670347214e-05, -6.17838159087114e-05, -6.36405748082325e-05,
+      -6.49367066216655e-05, -6.56333286315203e-05, -6.56958436593413e-05, -6.50945075904019e-05,
+      -6.38049605186097e-05, -6.18086996837519e-05, -5.90935560467187e-05, -5.56541090190876e-05,
+      -5.14920393470675e-05, -4.66164565295912e-05, -4.10441280109808e-05, -3.47996719938237e-05,
+      -2.79156665783376e-05, -2.04326788662001e-05, -1.23992322187405e-05, -3.87166892323876e-06,
+      5.08605353388702e-06, 1.44026598718483e-05, 2.39999408222502e-05, 3.3793221518863e-05,
+      4.36919181083795e-05, 5.36001789441798e-05, 6.34175885352306e-05, 7.30399988242425e-05,
+      8.23603695607744e-05, 9.12696923478507e-05, 9.96580565697514e-05, 0.000107415609818418,
+      0.00011443372204667, 0.000120606113341637, 0.000125829959870316, 0.000130007159896195,
+      0.00013304541062098, 0.000134859496029094, 0.000135372349177487, 0.000134516260004602,
+      0.000132233908516355, 0.000128479427075945, 0.000123219360830262, 0.000116433577204589,
+      0.000108115993498359, 9.82753772404976e-05, 8.69358409545384e-05, 7.41373441996984e-05,
+      5.99360064370558e-05, 4.44042925664689e-05, 2.76310474873753e-05, 9.72136422205949e-06,
+      -9.20368711376796e-06, -2.90075204247842e-05, -4.95386484544724e-05, -7.06314604030922e-05,
+      -9.21072060009465e-05, -0.000113775080535561, -0.000135433539981022, -0.000156871727085672,
+      -0.000177871057530865, -0.000198206995264627, -0.000217650842387229, -0.000235971790971234,
+      -0.000252938974881545, -0.00026832363801077, -0.000281901389826089, -0.000293454533675686,
+      -0.000302774336887524, -0.000309663446387276, -0.0003139381587971, -0.000315430865157396,
+      -0.000313992088194937, -0.00030949292704463, -0.000301826978102326, -0.00029091231408529,
+      -0.000276693346677348, -0.000259142543654889, -0.000238261709455401, -0.000214083469472826,
+      -0.000186672128620557, -0.000156124544446357, -0.000122570607345551, -8.617350977147e-05,
+      -4.71296480100136e-05, -5.66831340620411e-06, 3.79489938495681e-05, 8.34295569802634e-05,
+      0.000130450731376186, 0.000178661604877561, 0.000227684882702306, 0.000277119193924591,
+      0.000326541718095541, 0.000375510862795636, 0.000423569581471384, 0.000470248720375821,
+      0.000515070685651153, 0.000557553197722882, 0.000597213511355221, 0.000633572519291192,
+      0.000666159146931022, 0.000694514950737357, 0.000718198309186846, 0.000736789254005998,
+      0.000749894068576396, 0.000757149362470955, 0.000758227019105107, 0.000752837979234755,
+      0.000740736722946167, 0.000721724762115628, 0.000695654540322721, 0.000662432692479342,
+      0.000622022955212742, 0.000574448669794947, 0.000519795285072178, 0.000458211725344881,
+      0.000389911903766915, 0.000315175391733646, 0.000234347724472173, 0.000147839935380034,
+      5.61278466193471e-05, -4.0249535231851e-05, -0.000140691961860284, -0.000244540628045797,
+      -0.000351081427652389, -0.000459548609796911, -0.000569129420910031, -0.000678968674037606,
+      -0.000788174627814442, -0.000895824457984418, -0.00100097118411213, -0.0011026500724256,
+      -0.00119988631922752, -0.00129170238506049, -0.00137712561991066, -0.00145519734360278,
+      -0.00152497983071953, -0.00158556597307324, -0.00163608696311712, -0.00167572090867907,
+      -0.00170370156411082, -0.0017193261301145, -0.00172196363564581, -0.00171106203924865,
+      -0.00168615649454296, -0.00164687517099082, -0.00159294658806175, -0.00152420473750681,
+      -0.00144059467129409, -0.00134217669256032, -0.00122913019731641, -0.00110175646841526,
+      -0.000960480596404523, -0.000805853109341115, -0.000638549332506955, -0.000459369242889807,
+      -0.000269235344603658, -6.91898967488669e-05, 0.000139608848257922, 0.000355891621438786,
+      0.000578283914364874, 0.000805312942247838, 0.00103541545104235, 0.00126694678328931,
+      0.00149818998761475, 0.00172736716922373, 0.00195265049114823, 0.00217217393219471,
+      0.00238404702395201, 0.00258636754006147, 0.00277723534964025, 0.00295476731844246,
+      0.00311711151152849, 0.00326246209442616, 0.00338907446712255, 0.00349528016522527,
+      0.00357950199395418, 0.00364026846364141, 0.00367622799240053, 0.00368616380728781,
+      0.00366900535300374, 0.00362384342588484, 0.00354993995279074, 0.00344674033112824,
+      0.00331388297490776, 0.00315120862796903, 0.00295876734890044, 0.00273682572878897,
+      0.00248587201349437, 0.00220661936327815, 0.00190000853035599, 0.001567208673805,
+      0.00120961631182581, 0.000828852935228497, 0.000426760903792456, 5.3980429584044e-06,
+      -0.000432969856774434, -0.000885877932887524, -0.00135067268274724, -0.00182452390436083,
+      -0.00230443850159645, -0.00278727547265589, -0.0032697613351047, -0.00374850910156965,
+      -0.00422003632411361, -0.00468078488484025, -0.00512714171782136, -0.0055554611608386,
+      -0.00596208637580276, -0.00634337402880192, -0.00669571477919817, -0.00701555982232094,
+      -0.00729944230988622, -0.00754400342702866, -0.00774601334705949, -0.00790239684283733,
+      -0.00801025331020355, -0.00806688144803047, -0.00806979835033417, -0.00801676046103239,
+      -0.00790578313171864, -0.00773515552282333, -0.00750346109271049, -0.0072095887735486,
+      -0.00685274694114923, -0.00643247598782182, -0.00594865623861551, -0.00540151447057724,
+      -0.00479163229465485, -0.00411994522437453, -0.00338774803094566, -0.00259668938815594,
+      -0.00174877198878676, -0.000846344279125333, 0.00010790559463203, 0.00111096072942019,
+      0.0021594874560833, 0.00324984965845942, 0.00437812460586429, 0.0055401218123734,
+      0.00673140306025743, 0.00794730428606272, 0.00918295700103045, 0.0104333171620965,
+      0.011693187057972, 0.0129572479054332, 0.0142200822010636, 0.0154762053862214,
+      0.0167200993746519, 0.0179462395608425, 0.0191491208970547, 0.020323297008872,
+      0.0214634090662003, 0.0225642118602991, 0.0236206036061049, 0.0246276613324881,
+      0.0255806632339954, 0.0264751184731722, 0.0273067932575941, 0.0280717313289642,
+      0.0287662837654352, 0.0293871257454157, 0.0299312770366669, 0.0303961168974638,
+      0.0307794045656919, 0.031079288572073, 0.0312943235039711, 0.0314234606921673,
+      0.0314660854637623, 0.0314219892024994, 0.0312913879752159, 0.0310749188065529,
+      0.0307736322283745, 0.030388992279768, 0.0299228578805923, 0.0293774828314781,
+      0.0287554953247309, 0.0280598867684603, 0.0272939912974834, 0.0264614652842283,
+      0.0255662705749273, 0.0246126502752304, 0.0236050970852375, 0.0225483402609825,
+      0.02144730463624, 0.0203070938587189, 0.0191329531371593, 0.0179302450269461,
+      0.0167044121772051, 0.0154609577730298, 0.0142054026946425, 0.0129432631656528,
+      0.0116800172254443, 0.0104210739955306, 0.00917174853384495, 0.00793722923845053,
+      0.00672255316749215, 0.00553257670253515, 0.00437195552513003, 0.00324511690996587,
+      0.00215624086558819, 0.00110923801548779, 0.000107733161712531, -0.000844951835460961,
+      -0.00174581201281399, -0.00259217130951583, -0.0033816930372268, -0.00411238661035895,
+      -0.00478261336684227, -0.00539109157398343, -0.00593689503148198, -0.00641945237293839,
+      -0.00683854660019279, -0.00719430530443788, -0.00748719740658998, -0.00771802105009556,
+      -0.00788789335638285, -0.00799823738634586, -0.0080507667735219, -0.00804747082293034,
+      -0.00799059495329857, -0.00788262486457825, -0.00772626139223576, -0.00752440467476845,
+      -0.00728012807667255, -0.00699665956199169, -0.00667735375463963, -0.00632567377761006,
+      -0.00594516238197684, -0.00553942285478115, -0.00511209201067686, -0.0046668192371726,
+      -0.00420724088326097, -0.00373696186579764, -0.00325953005813062, -0.00277841836214066,
+      -0.0022970037534833, -0.0018185485387221, -0.00134618335869163, -0.000882890250068158,
+      -0.000431488471804187, 5.37930964128464e-06, 0.000425258942414075, 0.00082589517114684,
+      0.00120524037629366, 0.00156146206427366, 0.00189294794108719, 0.00219831033609807,
+      0.00247638882137835, 0.00272624986246228, 0.00294718728400767, 0.0031387188937515,
+      0.00330058392137289, 0.00343273649923503, 0.00353533984161913, 0.00360875856131315,
+      0.00365354912355542, 0.00367045076563954, 0.00366037315689027, 0.00362438568845391,
+      0.00356370420195162, 0.00347967795096338, 0.0033737753983587, 0.00324756954796612,
+      0.00310272467322648, 0.00294098001904786, 0.00276413536630571, 0.00257403613068163,
+      0.00237255869433284, 0.00216159550473094, 0.00194304110482335, 0.00171877793036401,
+      0.00149066338781267, 0.0012605165829882, 0.00103010702878237, 0.000801142596174031,
+      0.000575259269680828, 0.000354011717718095, 0.00013886415399611, -6.88172221998684e-05,
+      -0.000267771101789549, -0.000456846959423274, -0.000635009782854468, -0.000801343820057809,
+      -0.000955055525992066, -0.00109547527972609, -0.00122205796651542, -0.00133438291959465,
+      -0.00143215293064713, -0.00151519186329097, -0.00158344232477248, -0.00163696112576872,
+      -0.00167591555509716, -0.00170057802461088, -0.00171132001560181, -0.00170860614161938,
+      -0.00169298681430519, -0.00166509125847369, -0.00162561982870102, -0.00157533574383706,
+      -0.00151505717076361, -0.00144564895890653, -0.00136801402550191, -0.00128308474086225,
+      -0.00119181512854993, -0.00109517190139741, -0.000994127127341926, -0.000889649498276412,
+      -0.000782697694376111, -0.000674212700687349, -0.000565110880415887, -0.000456277979537845,
+      -0.000348562956787646, -0.000242772599449381, -0.000139666779432446, -3.99539567297325e-05,
+      5.57124658371322e-05, 0.000146737380418926, 0.000232586549827829, 0.000312788644805551,
+      0.000386936677386984, 0.000454688823083416, 0.000515768711920828, 0.000569965282920748,
+      0.000617131940089166, 0.00065718509722501, 0.000690102868247777, 0.00071592244785279,
+      0.000734737724997103, 0.000746696314308792, 0.000751996180042624, 0.000750882143620402,
+      0.000743641925510019, 0.000730602128896862, 0.000712123874109238, 0.000688598782289773,
+      0.000660444027744234, 0.000628098321612924, 0.00059201690601185, 0.000552667421288788,
+      0.000510525424033403, 0.000466069934191182, 0.000419779302319512, 0.000372127222362906,
+      0.000323578889947385, 0.000274587422609329, 0.000225590381887741, 0.000177006775629707,
+      0.000129234176711179, 8.26461910037324e-05, 3.75902418454643e-05, -5.61436354473699e-06,
+      -4.66780365968589e-05, -8.53421879583038e-05, -0.000121380195196252, -0.000154598063090816,
+      -0.000184834731044248, -0.000211962178582326, -0.000235885105212219, -0.000256540428381413,
+      -0.000273896584985778, -0.000287952367216349, -0.000298735685646534, -0.000306302245007828,
+      -0.000310733710648492, -0.00031213607871905, -0.000310637493385002, -0.000306386442389339,
+      -0.000299549341434613, -0.000290308467810974, -0.000278859544778243, -0.000265409529674798,
+      -0.000250174169195816, -0.000233375787502155, -0.000215240943362005, -0.000195998247363605,
+      -0.000175876193679869, -0.0001551010645926, -0.000133895067847334, -0.000112474372144789,
+      -9.10474773263559e-05, -6.98136354913004e-05, -4.89613921672571e-05, -2.86673548544059e-05,
+      -9.09507070900872e-06, 9.60591023613233e-06, 2.73008099611616e-05, 4.38702263636515e-05,
+      5.921056799707e-05, 7.32343396521173e-05, 8.5870262410026e-05, 9.70632027019747e-05,
+      0.000106774023151956, 0.000114979251520708, 0.00012167059321655, 0.000126854371046647,
+      0.000130550834001042, 0.000132793371449225, 0.000133627589093521, 0.00013311042857822,
+      0.000131309032440186, 0.000128299783682451, 0.000124167068861425, 0.00011900225217687,
+      0.000112902402179316, 0.000105969178548548, 9.83076679403894e-05, 9.00252198334783e-05,
+      8.12303260318004e-05, 7.20315510989167e-05, 6.25365064479411e-05, 5.28508135175798e-05,
+      4.30772415711544e-05, 3.33148200297728e-05, 2.36580453929491e-05, 1.41961945701041e-05,
+      5.0126855057897e-06, -3.81546715289005e-06, -1.22181099868612e-05, -2.01323291548761e-05,
+      -2.75027323368704e-05, -3.42816601914819e-05, -4.04293059546035e-05, -4.5913751819171e-05,
+      -5.07109289173968e-05, -5.48045136383735e-05, -5.81857348151971e-05, -6.08531408943236e-05,
+      -6.28122725174762e-05, -6.40753205516376e-05, -6.46606786176562e-05, -6.45925538265146e-05,
+      -6.3900399254635e-05, -6.26184555585496e-05, -6.07851652603131e-05, -5.84426306886598e-05,
+      -5.56360428163316e-05, -5.24130882695317e-05, -4.88233854412101e-05, -4.49179096904118e-05,
+      -4.07484258175828e-05, -3.63669569196645e-05, -3.18252605211455e-05, -2.71743319899542e-05,
+      -2.2463931600214e-05, -1.77421661646804e-05, -1.30550815811148e-05, -8.44630267238244e-06,
+      -3.95671941078035e-06, 3.75796815887952e-07, 4.51662481282256e-06, 8.43459019961301e-06,
+      1.21021121231024e-05, 1.54953158926219e-05, 1.85940934898099e-05, 2.13821313082008e-05,
+      2.38469019677723e-05, 2.59796070167795e-05, 2.77750914392527e-05, 2.92317345156334e-05,
+      3.0351291570696e-05, 3.11387266265228e-05, 3.16020086756907e-05, 3.17518970405217e-05,
+      3.16017030854709e-05, 3.11670337396208e-05, 3.04655332001857e-05, 2.95166064461228e-05,
+      2.8341146389721e-05, 2.69612537522335e-05, 2.53999623964773e-05, 2.3680961021455e-05,
+      2.18283257709118e-05, 1.98662619368406e-05, 1.78188620338915e-05, 1.57098602358019e-05,
+      1.35624177346472e-05, 1.13989226520061e-05, 9.2407981355791e-06, 7.10833683115197e-06,
+      5.0205558181915e-06, 2.99506632472912e-06, 1.04796845334931e-06, -8.06235050276882e-07,
+      -2.55470422416693e-06, -4.18630725107505e-06, -5.69164558328339e-06, -7.06306036590831e-06,
+      -8.29462078399956e-06, -9.38209359446773e-06, -1.03229003798333e-05, -1.11160552478395e-05,
+      -1.17620920718764e-05, -1.22629789984785e-05, -1.26220238598762e-05, -1.28437650346314e-05,
+      -1.29338659462519e-05, -1.28989877339336e-05, -1.27466773847118e-05, -1.24852303997613e-05,
+      -1.21235752885696e-05, -1.1671139873215e-05, -1.11377266875934e-05, -1.05333938336116e-05,
+      -9.86833492788719e-06, -9.15276177693158e-06, -8.39680342323845e-06, -7.61039837016142e-06,
+      -6.80320636092802e-06, -5.98452015765361e-06, -5.16318959853379e-06, -4.34755384048913e-06,
+      -3.54538224200951e-06, -2.76382706942968e-06, -2.00938234229397e-06, -1.28785382003116e-06,
+      -6.04338538323645e-07, 3.67878918439146e-08, 6.31874343071104e-07, 1.17798970222793e-06,
+      1.67291079833376e-06, 2.11510268854909e-06, 2.50369294008124e-06, 2.83844019577373e-06,
+      3.11969620270247e-06, 3.34836659021676e-06, 3.52586334884109e-06, 3.65405890079273e-06,
+      3.73523425878375e-06, 3.77202786694397e-06, 3.76738262275467e-06, 3.72449244423478e-06,
+      3.64675020136929e-06, 3.5376954201638e-06, 3.40096380568866e-06, 3.24024040310178e-06,
+      3.05921207655047e-06, 2.86152544504148e-06, 2.65074777416885e-06, 2.43032923208375e-06,
+      2.20357173930097e-06, 1.97359963749477e-06, 1.7433346783946e-06, 1.51547590121481e-06,
+      1.29248269331583e-06, 1.07656228465203e-06, 8.69660595981259e-07, 6.73457634547958e-07,
+      4.89366072997655e-07, 3.18533068366378e-07, 1.6184569062716e-07, 1.99388363597564e-08,
+      -1.06793926590854e-07, -2.18187366840539e-07, -3.14289508196453e-07, -3.95344869730252e-07,
+      -4.6177621015886e-07, -5.14165492404572e-07, -5.53233689970511e-07, -5.79820607526926e-07,
+      -5.94864104641601e-07, -5.99379916366161e-07, -5.94441189605277e-07, -5.8115966794503e-07,
+      -5.60666421733913e-07, -5.34094965587428e-07, -5.02564375892689e-07, -4.67164767314898e-07]'
+    type: fff
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [760, 448.0]
+    rotation: 0
+    state: enabled
+- name: fft_filter_xxx_1
+  id: fft_filter_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    decim: '1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    nthreads: '1'
+    samp_delay: '0'
+    taps: firdes.low_pass(1.0, samp_rate, 4e3, 2.5e3, window.WIN_BLACKMAN_HARRIS)
+    type: ccc
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [800, 192.0]
+    rotation: 0
+    state: enabled
+- name: qtgui_eye_sink_x_0
+  id: qtgui_eye_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'False'
+    axislabels: 'True'
+    color1: blue
+    color10: blue
+    color2: blue
+    color3: blue
+    color4: blue
+    color5: blue
+    color6: blue
+    color7: blue
+    color8: blue
+    color9: blue
+    comment: ''
+    ctrlpanel: 'False'
+    entags: 'False'
+    grid: 'False'
+    gui_hint: ''
+    label1: Eye Pattern
+    label10: Signal 10
+    label2: Signal 2
+    label3: Signal 3
+    label4: Signal 4
+    label5: Signal 5
+    label6: Signal 6
+    label7: Signal 7
+    label8: Signal 8
+    label9: Signal 9
+    legend: 'True'
+    marker1: '-1'
+    marker10: '-1'
+    marker2: '-1'
+    marker3: '-1'
+    marker4: '-1'
+    marker5: '-1'
+    marker6: '-1'
+    marker7: '-1'
+    marker8: '-1'
+    marker9: '-1'
+    nconnections: '1'
+    samp_per_symbol: '1'
+    size: '64'
+    srate: Fs
+    style1: '1'
+    style10: '1'
+    style2: '1'
+    style3: '1'
+    style4: '1'
+    style5: '1'
+    style6: '1'
+    style7: '1'
+    style8: '1'
+    style9: '1'
+    tr_chan: '0'
+    tr_delay: '0'
+    tr_level: '0.0'
+    tr_mode: qtgui.TRIG_MODE_FREE
+    tr_slope: qtgui.TRIG_SLOPE_POS
+    tr_tag: '""'
+    type: float
+    update_time: 1/60
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    ylabel: Symbol
+    ymax: '5'
+    ymin: '-5'
+    yunit: '""'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [304, 800.0]
+    rotation: 0
+    state: disabled
+- name: qtgui_time_sink_x_0
+  id: qtgui_time_sink_x
+  parameters:
+    affinity: ''
+    alias: ''
+    alpha1: '1.0'
+    alpha10: '1.0'
+    alpha2: '1.0'
+    alpha3: '1.0'
+    alpha4: '1.0'
+    alpha5: '1.0'
+    alpha6: '1.0'
+    alpha7: '1.0'
+    alpha8: '1.0'
+    alpha9: '1.0'
+    autoscale: 'True'
+    axislabels: 'True'
+    color1: blue
+    color10: dark blue
+    color2: red
+    color3: green
+    color4: black
+    color5: cyan
+    color6: magenta
+    color7: yellow
+    color8: dark red
+    color9: dark green
+    comment: ''
+    ctrlpanel: 'False'
+    entags: 'False'
+    grid: 'False'
+    gui_hint: ''
+    label1: Signal 1
+    label10: Signal 10
+    label2: Signal 2
+    label3: Signal 3
+    label4: Signal 4
+    label5: Signal 5
+    label6: Signal 6
+    label7: Signal 7
+    label8: Signal 8
+    label9: Signal 9
+    legend: 'False'
+    marker1: '-1'
+    marker10: '-1'
+    marker2: '-1'
+    marker3: '-1'
+    marker4: '-1'
+    marker5: '-1'
+    marker6: '-1'
+    marker7: '-1'
+    marker8: '-1'
+    marker9: '-1'
+    name: '"Sync Word Detect"'
+    nconnections: '1'
+    size: '1024'
+    srate: 2.4e3
+    stemplot: 'False'
+    style1: '1'
+    style10: '1'
+    style2: '1'
+    style3: '1'
+    style4: '1'
+    style5: '1'
+    style6: '1'
+    style7: '1'
+    style8: '1'
+    style9: '1'
+    tr_chan: '0'
+    tr_delay: '0'
+    tr_level: '65'
+    tr_mode: qtgui.TRIG_MODE_NORM
+    tr_slope: qtgui.TRIG_SLOPE_POS
+    tr_tag: '""'
+    type: float
+    update_time: '0.10'
+    width1: '1'
+    width10: '1'
+    width2: '1'
+    width3: '1'
+    width4: '1'
+    width5: '1'
+    width6: '1'
+    width7: '1'
+    width8: '1'
+    width9: '1'
+    ylabel: correlation
+    ymax: '1'
+    ymin: '-1'
+    yunit: '""'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1400, 864.0]
+    rotation: 0
+    state: disabled
+- name: rational_resampler_xxx_0
+  id: rational_resampler_xxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    decim: decimation
+    fbw: '0'
+    interp: '1'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    taps: ''
+    type: ccc
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [272, 440.0]
+    rotation: 0
+    state: enabled
+- name: soapy_rtlsdr_source_0
+  id: soapy_rtlsdr_source
+  parameters:
+    affinity: ''
+    agc: 'False'
+    alias: ''
+    bias: 'False'
+    bufflen: '16384'
+    center_freq: freq + offset+err_offset
+    comment: ''
+    dev_args: ''
+    freq_correction: '0'
+    gain: '30'
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    samp_rate: samp_rate
+    type: fc32
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [128, 200.0]
+    rotation: 0
+    state: enabled
+- name: virtual_sink_0
+  id: virtual_sink
+  parameters:
+    alias: ''
+    comment: ''
+    stream_id: sig1
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1192, 208.0]
+    rotation: 0
+    state: enabled
+- name: virtual_sink_1
+  id: virtual_sink
+  parameters:
+    alias: ''
+    comment: ''
+    stream_id: sym1
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1752, 416.0]
+    rotation: 0
+    state: enabled
+- name: virtual_source_0
+  id: virtual_source
+  parameters:
+    alias: ''
+    comment: ''
+    stream_id: sig1
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [96, 464.0]
+    rotation: 0
+    state: enabled
+- name: virtual_source_1
+  id: virtual_source
+  parameters:
+    alias: ''
+    comment: ''
+    stream_id: sym1
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [88, 696.0]
+    rotation: 0
+    state: enabled
+- name: zeromq_push_msg_sink_0
+  id: zeromq_push_msg_sink
+  parameters:
+    address: tcp://127.0.0.1:5555
+    affinity: ''
+    alias: ''
+    bind: 'True'
+    comment: ''
+    timeout: '100'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [616, 688.0]
+    rotation: 0
+    state: enabled
+
+connections:
+- [analog_pwr_squelch_xx_0, '0', virtual_sink_0, '0']
+- [analog_quadrature_demod_cf_0, '0', fft_filter_xxx_0, '0']
+- [blocks_freqshift_cc_0, '0', fft_filter_xxx_1, '0']
+- [blocks_multiply_const_vxx_0, '0', digital_symbol_sync_xx_0, '0']
+- [blocks_multiply_const_vxx_1, '0', virtual_sink_1, '0']
+- [blocks_throttle2_0, '0', blocks_freqshift_cc_0, '0']
+- [digital_symbol_sync_xx_0, '0', blocks_multiply_const_vxx_1, '0']
+- [epy_block_0, packet_out, zeromq_push_msg_sink_0, in]
+- [epy_block_2, '0', qtgui_time_sink_x_0, '0']
+- [fft_filter_xxx_0, '0', blocks_multiply_const_vxx_0, '0']
+- [fft_filter_xxx_1, '0', analog_pwr_squelch_xx_0, '0']
+- [rational_resampler_xxx_0, '0', analog_quadrature_demod_cf_0, '0']
+- [soapy_rtlsdr_source_0, '0', blocks_throttle2_0, '0']
+- [virtual_source_0, '0', rational_resampler_xxx_0, '0']
+- [virtual_source_1, '0', epy_block_0, '0']
+- [virtual_source_1, '0', qtgui_eye_sink_x_0, '0']
+
+metadata:
+  file_format: 1
+  grc_version: 3.10.12.0
