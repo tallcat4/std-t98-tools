@@ -146,7 +146,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1016, 184.0]
+    coordinate: [1024, 184.0]
     rotation: 0
     state: enabled
 - name: analog_quadrature_demod_cf_0
@@ -162,7 +162,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [528, 464.0]
+    coordinate: [528, 424.0]
     rotation: 0
     state: enabled
 - name: blocks_freqshift_cc_0
@@ -197,7 +197,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1008, 464.0]
+    coordinate: [976, 424.0]
     rotation: 0
     state: enabled
 - name: blocks_multiply_const_vxx_1
@@ -215,7 +215,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1568, 416.0]
+    coordinate: [1536, 376.0]
     rotation: 0
     state: enabled
 - name: blocks_throttle2_0
@@ -263,7 +263,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1232, 404.0]
+    coordinate: [1200, 364.0]
     rotation: 0
     state: enabled
 - name: epy_block_0
@@ -343,7 +343,7 @@ blocks:
     minoutbuf: '0'
     packet_len: '192'
     sync_word: '[-3.0, +1.0, -3.0, +3.0, -3.0, -3.0, +3.0, +3.0, -1.0, +3.0]'
-    threshold_ratio: '0.85'
+    threshold_ratio: '0.9'
   states:
     _io_cache: "('Sync Word Correlator', 'sync_word_correlator', [('sync_word', 'None'),\
       \ ('threshold_ratio', '0.9'), ('packet_len', '192'), ('abs_limit', '4.0')],\
@@ -362,230 +362,9 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [296, 672.0]
+    coordinate: [304, 576.0]
     rotation: 0
     state: enabled
-- name: epy_block_1
-  id: epy_block
-  parameters:
-    _source_code: "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n\nimport numpy\
-      \ as np\nfrom gnuradio import gr\nimport pmt\n\nclass pdu_f32_passthrough(gr.basic_block):\n\
-      \    \"\"\"\n    \u5165\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"in\"  \uFF08\
-      PDU: f32vector\uFF09\n    \u51FA\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"out\"\
-      \ \uFF08PDU: f32vector\uFF09\n    \u4ED5\u69D8: \u5165\u529B\u306Efloat\u5024\
-      \u3092\u305D\u306E\u307E\u307E\u51FA\u529B\u3057\u307E\u3059\u3002\n       \
-      \  enforce_len \u304C\u6307\u5B9A\u3055\u308C\u3066\u3044\u308B\u5834\u5408\u3001\
-      \u9577\u3055\u306E\u30C1\u30A7\u30C3\u30AF\u307E\u305F\u306F\u30AF\u30EA\u30C3\
-      \u30D7\u3092\u884C\u3044\u307E\u3059\u3002\n    \"\"\"\n    def __init__(self,\
-      \ enforce_len=192, action=\"clip\"):\n        gr.basic_block.__init__(self,\
-      \ name=\"pdu_f32_passthrough\",\n                                in_sig=[],\
-      \ out_sig=[])\n        self.message_port_register_in(pmt.intern(\"in\"))\n \
-      \       self.message_port_register_out(pmt.intern(\"out\"))\n        self.set_msg_handler(pmt.intern(\"\
-      in\"), self._handle_pdu)\n\n        self.enforce_len = int(enforce_len)\n  \
-      \      self.action = str(action)\n        \n        # \u30CF\u30FC\u30C9\u5224\
-      \u5B9A\u7528\u306E\u30EC\u30D9\u30EB\u8A2D\u5B9A(_levels)\u306F\u524A\u9664\u3057\
-      \u307E\u3057\u305F\n\n    # _slice_indices \u30E1\u30BD\u30C3\u30C9\u306F\u4E0D\
-      \u8981\u306A\u305F\u3081\u524A\u9664\u3057\u307E\u3057\u305F\n\n    def _handle_pdu(self,\
-      \ pdu):\n        # PDU(pair) \u4EE5\u5916\u306F\u6368\u3066\u308B\n        if\
-      \ not pmt.is_pair(pdu):\n            return\n        meta = pmt.car(pdu)\n \
-      \       vec  = pmt.cdr(pdu)\n        \n        # f32vector \u4EE5\u5916\u306F\
-      \u6368\u3066\u308B\n        if not pmt.is_f32vector(vec):\n            return\n\
-      \n        # numpy \u914D\u5217\u306B\u5909\u63DB (float32)\n        arr = np.asarray(pmt.f32vector_elements(vec),\
-      \ dtype=np.float32)\n\n        n = arr.size\n        if n == 0:\n          \
-      \  return\n\n        # \u9577\u3055\u306E\u6271\u3044\uFF08clip / reject \u306E\
-      \u51E6\u7406\uFF09\n        if self.enforce_len > 0 and n != self.enforce_len:\n\
-      \            if self.action == \"reject\":\n                # \u9577\u3055\u304C\
-      \u5408\u308F\u306A\u3044\u5834\u5408\u306F\u30D1\u30B1\u30C3\u30C8\u3092\u7834\
-      \u68C4\n                return\n            elif self.action == \"clip\":\n\
-      \                # \u6307\u5B9A\u9577\u3088\u308A\u9577\u3044\u5834\u5408\u306F\
-      \u5207\u308A\u8A70\u3081\u3001\u77ED\u3044\u5834\u5408\u306F\u305D\u306E\u307E\
-      \u307E\uFF08\u3042\u308B\u3044\u306F\u30D1\u30C7\u30A3\u30F3\u30B0\u304C\u5FC5\
-      \u8981\u306A\u3089\u5225\u9014\u5B9F\u88C5\uFF09\n                # \u3053\u3053\
-      \u3067\u306F\u5143\u306E\u30ED\u30B8\u30C3\u30AF\u306B\u5F93\u3044\u3001\u9577\
-      \u3044\u5834\u5408\u306E\u307F\u5207\u308A\u8A70\u3081\u308B\u6319\u52D5\u3068\
-      \u306A\u308A\u307E\u3059\n                if n > self.enforce_len:\n       \
-      \             arr = arr[:self.enforce_len]\n                # \u77ED\u3044\u5834\
-      \u5408\u3092\u3069\u3046\u3059\u308B\u304B\u306F\u8981\u4EF6\u6B21\u7B2C\u3067\
-      \u3059\u304C\u3001\u3053\u3053\u3067\u306F\u4F55\u3082\u3057\u307E\u305B\u3093\
-      \n        \n        # --- \u5909\u66F4\u70B9 ---\n        # \u30B9\u30E9\u30A4\
-      \u30B9(\u30CF\u30FC\u30C9\u5224\u5B9A)\u3092\u884C\u308F\u305A\u3001float\u5024\
-      \u3092\u305D\u306E\u307E\u307E\u30DA\u30A4\u30ED\u30FC\u30C9\u306B\u3059\u308B\
-      \n        \n        # f32vector \u3092\u4F5C\u6210\uFF08List[float] \u3092\u6E21\
-      \u3059\uFF09\n        # arr.tolist() \u3067 Python \u306E float \u30EA\u30B9\
-      \u30C8\u306B\u5909\u63DB\u3057\u3066\u304B\u3089 PMT \u3092\u4F5C\u6210\n  \
-      \      payload = pmt.init_f32vector(int(arr.size), arr.tolist())\n\n       \
-      \ # \u30E1\u30BF\u306F\u7A7A\u8F9E\u66F8\u3067\u7D71\u4E00\uFF08\u5143\u306E\
-      \u30B3\u30FC\u30C9\u306E\u6319\u52D5\u3092\u7DAD\u6301\uFF09\n        # \u5FC5\
-      \u8981\u3067\u3042\u308C\u3070 input \u306E meta \u3092\u305D\u306E\u307E\u307E\
-      \u4F7F\u3063\u3066\u304F\u3060\u3055\u3044: out_meta = meta\n        out_meta\
-      \ = pmt.make_dict()\n\n        # PDU \u3067\u9001\u51FA\n        self.message_port_pub(pmt.intern(\"\
-      out\"), pmt.cons(out_meta, payload))"
-    action: '"reject"'
-    affinity: ''
-    alias: ''
-    comment: ''
-    enforce_len: '192'
-    maxoutbuf: '0'
-    minoutbuf: '0'
-  states:
-    _io_cache: "('pdu_f32_passthrough', 'pdu_f32_passthrough', [('enforce_len', '192'),\
-      \ ('action', \"'clip'\")], [('in', 'message', 1)], [('out', 'message', 1)],\
-      \ '\\n\u5165\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"in\"  \uFF08PDU: f32vector\uFF09\
-      \\n\u51FA\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"out\" \uFF08PDU: f32vector\uFF09\
-      \\n\u4ED5\u69D8: \u5165\u529B\u306Efloat\u5024\u3092\u305D\u306E\u307E\u307E\
-      \u51FA\u529B\u3057\u307E\u3059\u3002\\n     enforce_len \u304C\u6307\u5B9A\u3055\
-      \u308C\u3066\u3044\u308B\u5834\u5408\u3001\u9577\u3055\u306E\u30C1\u30A7\u30C3\
-      \u30AF\u307E\u305F\u306F\u30AF\u30EA\u30C3\u30D7\u3092\u884C\u3044\u307E\u3059\
-      \u3002\\n', ['action', 'enforce_len'])"
-    bus_sink: false
-    bus_source: false
-    bus_structure: null
-    coordinate: [1200, 776.0]
-    rotation: 0
-    state: disabled
-- name: epy_block_1_0
-  id: epy_block
-  parameters:
-    _source_code: "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n\nimport numpy\
-      \ as np\nfrom gnuradio import gr\nimport pmt\n\nclass pdu_f32_hardslice_to_u8(gr.basic_block):\n\
-      \    \"\"\"\n    \u5165\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"in\"  \uFF08\
-      PDU: f32vector\uFF09\n    \u51FA\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"out\"\
-      \ \uFF08PDU: u8vector, \u5404\u8981\u7D20\u306F 0,1,2,3\uFF09\n    \u4ED5\u69D8\
-      : \u6700\u8FD1\u508D\u306E4\u5024 {-3,-1,1,3} \u306B\u3088\u308B\u30CF\u30FC\
-      \u30C9\u5224\u5B9A\u3067\u30A4\u30F3\u30C7\u30C3\u30AF\u30B9 0..3 \u3092\u51FA\
-      \u529B\u3002\n         PDU\u30DA\u30A2\u306E\u307F\u53D7\u7406\u3002\u578B\u304C\
-      \u9055\u3046\u30FB\u7A7A\u30FB\u305D\u306E\u4ED6\u4E0D\u6574\u5408\u306F\u9759\
-      \u304B\u306B\u6368\u3066\u308B\u3002\n    \"\"\"\n    def __init__(self, enforce_len=192,\
-      \ action=\"clip\"):\n        gr.basic_block.__init__(self, name=\"pdu_f32_hardslice_to_u8\"\
-      ,\n                                in_sig=[], out_sig=[])\n        self.message_port_register_in(pmt.intern(\"\
-      in\"))\n        self.message_port_register_out(pmt.intern(\"out\"))\n      \
-      \  self.set_msg_handler(pmt.intern(\"in\"), self._handle_pdu)\n\n        self.enforce_len\
-      \ = int(enforce_len)\n        self.action = str(action)\n\n        self._levels\
-      \ = np.asarray([+1.0, +3.0, -1.0, -3.0], dtype=np.float32)\n\n    def _slice_indices(self,\
-      \ arr_f32):\n        diff = arr_f32[:, None] - self._levels[None, :]\n     \
-      \   idx = np.argmin(diff * diff, axis=1).astype(np.uint8)  # 0..3\n        return\
-      \ idx\n\n    def _handle_pdu(self, pdu):\n        # PDU(pair) \u4EE5\u5916\u306F\
-      \u6368\u3066\u308B\n        if not pmt.is_pair(pdu):\n            return\n \
-      \       meta = pmt.car(pdu)\n        vec  = pmt.cdr(pdu)\n        if not pmt.is_f32vector(vec):\n\
-      \            return\n\n        # --- \u4FEE\u6B63\u70B9 ---\n        # f32vector\
-      \ \u304B\u3089 numpy \u914D\u5217\u306B\u5909\u63DB\u3059\u308B\u969B\u3001\
-      dtype\u3092float32\u306E\u307E\u307E\u306B\u3059\u308B\n        arr = np.asarray(pmt.f32vector_elements(vec),\
-      \ dtype=np.float32)\n        # --- \u3053\u3053\u307E\u3067 ---\n\n        n\
-      \ = arr.size\n        if n == 0:\n            return\n\n        # \u9577\u3055\
-      \u306E\u6271\u3044\uFF08clip / reject \u306E\u6700\u5C0F\u9650\u306E\u307F\uFF09\
-      \n        if self.enforce_len > 0 and n != self.enforce_len:\n            if\
-      \ self.action == \"reject\":\n                return\n            elif self.action\
-      \ == \"clip\":\n                arr = arr[:self.enforce_len]\n        \n   \
-      \     # \u6B63\u3057\u3044\u6D6E\u52D5\u5C0F\u6570\u70B9\u6570\u306E\u914D\u5217\
-      \u3067\u30B9\u30E9\u30A4\u30B9\u51E6\u7406\u3092\u5B9F\u884C\n        idx =\
-      \ self._slice_indices(arr)  # uint8, 0..3\n        \n        # \u65B0\u3057\u3044\
-      PDU\u306E\u30DA\u30A4\u30ED\u30FC\u30C9\u9577\u3092\u6C7A\u5B9A\n        payload_len\
-      \ = idx.size\n\n        # u8vector \u3092\u4F5C\u6210\uFF08List[int] \u3092\u6E21\
-      \u3059\uFF09\n        payload = pmt.init_u8vector(int(payload_len), idx.tolist())\n\
-      \n        # \u30E1\u30BF\u306F\u7A7A\u8F9E\u66F8\u3067\u7D71\u4E00\uFF08\u6700\
-      \u5C0F\u69CB\u6210\uFF09\n        out_meta = pmt.make_dict()\n\n        # PDU\
-      \ \u3067\u9001\u51FA\n        self.message_port_pub(pmt.intern(\"out\"), pmt.cons(out_meta,\
-      \ payload))"
-    action: '"reject"'
-    affinity: ''
-    alias: ''
-    comment: ''
-    enforce_len: '192'
-    maxoutbuf: '0'
-    minoutbuf: '0'
-  states:
-    _io_cache: "('pdu_f32_hardslice_to_u8', 'pdu_f32_hardslice_to_u8', [('enforce_len',\
-      \ '192'), ('action', \"'clip'\")], [('in', 'message', 1)], [('out', 'message',\
-      \ 1)], '\\n\u5165\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"in\"  \uFF08PDU:\
-      \ f32vector\uFF09\\n\u51FA\u529B(\u30E1\u30C3\u30BB\u30FC\u30B8): \"out\" \uFF08\
-      PDU: u8vector, \u5404\u8981\u7D20\u306F 0,1,2,3\uFF09\\n\u4ED5\u69D8: \u6700\
-      \u8FD1\u508D\u306E4\u5024 {-3,-1,1,3} \u306B\u3088\u308B\u30CF\u30FC\u30C9\u5224\
-      \u5B9A\u3067\u30A4\u30F3\u30C7\u30C3\u30AF\u30B9 0..3 \u3092\u51FA\u529B\u3002\
-      \\n     PDU\u30DA\u30A2\u306E\u307F\u53D7\u7406\u3002\u578B\u304C\u9055\u3046\
-      \u30FB\u7A7A\u30FB\u305D\u306E\u4ED6\u4E0D\u6574\u5408\u306F\u9759\u304B\u306B\
-      \u6368\u3066\u308B\u3002\\n', ['action', 'enforce_len'])"
-    bus_sink: false
-    bus_source: false
-    bus_structure: null
-    coordinate: [1192, 696.0]
-    rotation: 0
-    state: disabled
-- name: epy_block_2
-  id: epy_block
-  parameters:
-    _source_code: "\"\"\"\nSync Word Detection using Correlation and Peak Output\n\
-      \"\"\"\n\nimport numpy as np\nfrom gnuradio import gr\n\nclass sync_word_correlator(gr.sync_block):\n\
-      \    \"\"\"\n    Looks for a specific sync word in a float stream using correlation.\n\
-      \    It continuously calculates and outputs the correlation value (dot product)\n\
-      \    between the sync word and the current window of symbols.\n    It also prints\
-      \ a message when the correlation is above a threshold,\n    indicating a peak.\n\
-      \    \"\"\"\n    def __init__(self, \n                 abs_limit=4.0):\n   \
-      \     gr.sync_block.__init__(self,\n            name = \"Sync Word Correlator\"\
-      ,\n            in_sig = [np.float32],\n            out_sig = [np.float32]) #\
-      \ \u51FA\u529B\u3082float\u578B\n        # \u691C\u51FA\u3057\u305F\u3044\u540C\
-      \u671F\u30EF\u30FC\u30C9 (\u30C6\u30F3\u30D7\u30EC\u30FC\u30C8)\n        # \u8A08\
-      \u7B97\u52B9\u7387\u306E\u305F\u3081\u306BNumpy\u914D\u5217\u306B\u5909\u63DB\
-      \u3057\u3066\u304A\u304F\n        self.sync_word = np.array([-3.0, +1.0, -3.0,\
-      \ +3.0, -3.0, -3.0, +3.0, +3.0, -1.0, +3.0], dtype=np.float32)\n\n        #\
-      \ \u30D4\u30FC\u30AF\u3068\u307F\u306A\u3059\u305F\u3081\u306E\u76F8\u95A2\u5024\
-      \u306E\u95BE\u5024\n        # \u5B8C\u5168\u306B\u4E00\u81F4\u3057\u305F\u5834\
-      \u5408\u306E\u81EA\u5DF1\u76F8\u95A2\u5024\u306F sum(sync_word[i]^2) = 74.0\
-      \ \u3068\u306A\u308B\n        # \u3053\u3053\u3067\u306F\u3001\u81EA\u5DF1\u76F8\
-      \u95A2\u5024\u306E90%\u3092\u95BE\u5024\u3068\u3057\u3066\u8A2D\u5B9A\u3059\u308B\
-      \n        self.correlation_threshold = np.dot(self.sync_word, self.sync_word)\
-      \ * 0.9 \n        \n        # \u30B7\u30D5\u30C8\u30EC\u30B8\u30B9\u30BF\u3092\
-      Numpy\u914D\u5217\u3068\u3057\u3066\u521D\u671F\u5316\n        self.shift_register\
-      \ = np.zeros(len(self.sync_word), dtype=np.float32)\n\n        self.abs_limit\
-      \ = float(abs_limit)\n\n    def work(self, input_items, output_items):\n   \
-      \     # input_items[0] \u306F\u5165\u529B\u30B9\u30C8\u30EA\u30FC\u30E0\u30C7\
-      \u30FC\u30BF (Numpy\u914D\u5217)\n        # output_items[0] \u306F\u51FA\u529B\
-      \u30B9\u30C8\u30EA\u30FC\u30E0\u30C7\u30FC\u30BF (Numpy\u914D\u5217)\n     \
-      \   in_data = input_items[0]\n        out_data = output_items[0]\n\n       \
-      \ # \u5165\u529B\u3055\u308C\u305F\u5404\u30B7\u30F3\u30DC\u30EB\u3092\u4E00\
-      \u3064\u305A\u3064\u51E6\u7406\n        for i in range(len(in_data)):\n    \
-      \        current_symbol = in_data[i]\n\n            # \u5165\u529B\u30B7\u30F3\
-      \u30DC\u30EB\u306E\u5024\u304C\u7570\u5E38\u306B\u5927\u304D\u3044\u5834\u5408\
-      \u306F\u30AF\u30EA\u30C3\u30D4\u30F3\u30B0\u3059\u308B\u3002\n            #\
-      \ \u3053\u308C\u306B\u3088\u308A\u3001\u30CE\u30A4\u30BA\u306B\u3088\u308B\u6975\
-      \u7AEF\u306A\u5024\u304C\u76F8\u95A2\u5024\u306B\u5F71\u97FF\u3092\u4E0E\u3048\
-      \u308B\u306E\u3092\u9632\u3050\u3002\n            if current_symbol > self.abs_limit:\n\
-      \                current_symbol = self.abs_limit\n            elif current_symbol\
-      \ < -self.abs_limit:\n                current_symbol = -self.abs_limit\n   \
-      \         \n            # \u30B7\u30D5\u30C8\u30EC\u30B8\u30B9\u30BF\u3092\u66F4\
-      \u65B0 (np.roll\u306F\u52B9\u7387\u7684\u306A\u30B7\u30D5\u30C8\u64CD\u4F5C\
-      )\n            # 1. \u914D\u5217\u5168\u4F53\u3092\u5DE6\u306B1\u3064\u5FAA\u74B0\
-      \u30B7\u30D5\u30C8\n            self.shift_register = np.roll(self.shift_register,\
-      \ -1)\n            # 2. \u672B\u5C3E\u306E\u8981\u7D20(\u3082\u3068\u3082\u3068\
-      \u5148\u982D\u306B\u3042\u3063\u305F\u53E4\u3044\u5024)\u3092\u65B0\u3057\u3044\
-      \u30B7\u30F3\u30DC\u30EB\u3067\u4E0A\u66F8\u304D\n            self.shift_register[-1]\
-      \ = current_symbol\n\n            # --- \u3053\u3053\u304C\u91CD\u8981\u306A\
-      \u5909\u66F4\u70B9 ---\n            # \u73FE\u5728\u306E\u30B7\u30D5\u30C8\u30EC\
-      \u30B8\u30B9\u30BF\u3068\u540C\u671F\u30EF\u30FC\u30C9\u3068\u306E\u76F8\u95A2\
-      \ (\u5185\u7A4D) \u3092\u8A08\u7B97\n            correlation_value = np.dot(self.shift_register,\
-      \ self.sync_word)\n            \n            # \u8A08\u7B97\u3057\u305F\u76F8\
-      \u95A2\u5024\u3092\u51FA\u529B\u30B9\u30C8\u30EA\u30FC\u30E0\u306B\u66F8\u304D\
-      \u8FBC\u3080\n            out_data[i] = correlation_value\n            \n  \
-      \      # \u51E6\u7406\u3057\u305F (\u305D\u3057\u3066\u51FA\u529B\u3057\u305F\
-      ) \u30A2\u30A4\u30C6\u30E0\u6570\u3092\u8FD4\u3059\n        return len(out_data)"
-    abs_limit: '4.0'
-    affinity: ''
-    alias: ''
-    comment: ''
-    maxoutbuf: '0'
-    minoutbuf: '0'
-  states:
-    _io_cache: ('Sync Word Correlator', 'sync_word_correlator', [('abs_limit', '4.0')],
-      [('0', 'float', 1)], [('0', 'float', 1)], '\nLooks for a specific sync word
-      in a float stream using correlation.\nIt continuously calculates and outputs
-      the correlation value (dot product)\nbetween the sync word and the current window
-      of symbols.\nIt also prints a message when the correlation is above a threshold,\nindicating
-      a peak.\n', ['abs_limit'])
-    bus_sink: false
-    bus_source: false
-    bus_structure: null
-    coordinate: [1208, 888.0]
-    rotation: 0
-    state: disabled
 - name: fft_filter_xxx_0
   id: fft_filter_xxx
   parameters:
@@ -802,7 +581,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [760, 448.0]
+    coordinate: [728, 408.0]
     rotation: 0
     state: enabled
 - name: fft_filter_xxx_1
@@ -822,7 +601,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [800, 192.0]
+    coordinate: [784, 192.0]
     rotation: 0
     state: enabled
 - name: qtgui_eye_sink_x_0
@@ -918,104 +697,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [304, 800.0]
-    rotation: 0
-    state: disabled
-- name: qtgui_time_sink_x_0
-  id: qtgui_time_sink_x
-  parameters:
-    affinity: ''
-    alias: ''
-    alpha1: '1.0'
-    alpha10: '1.0'
-    alpha2: '1.0'
-    alpha3: '1.0'
-    alpha4: '1.0'
-    alpha5: '1.0'
-    alpha6: '1.0'
-    alpha7: '1.0'
-    alpha8: '1.0'
-    alpha9: '1.0'
-    autoscale: 'True'
-    axislabels: 'True'
-    color1: blue
-    color10: dark blue
-    color2: red
-    color3: green
-    color4: black
-    color5: cyan
-    color6: magenta
-    color7: yellow
-    color8: dark red
-    color9: dark green
-    comment: ''
-    ctrlpanel: 'False'
-    entags: 'False'
-    grid: 'False'
-    gui_hint: ''
-    label1: Signal 1
-    label10: Signal 10
-    label2: Signal 2
-    label3: Signal 3
-    label4: Signal 4
-    label5: Signal 5
-    label6: Signal 6
-    label7: Signal 7
-    label8: Signal 8
-    label9: Signal 9
-    legend: 'False'
-    marker1: '-1'
-    marker10: '-1'
-    marker2: '-1'
-    marker3: '-1'
-    marker4: '-1'
-    marker5: '-1'
-    marker6: '-1'
-    marker7: '-1'
-    marker8: '-1'
-    marker9: '-1'
-    name: '"Sync Word Detect"'
-    nconnections: '1'
-    size: '1024'
-    srate: 2.4e3
-    stemplot: 'False'
-    style1: '1'
-    style10: '1'
-    style2: '1'
-    style3: '1'
-    style4: '1'
-    style5: '1'
-    style6: '1'
-    style7: '1'
-    style8: '1'
-    style9: '1'
-    tr_chan: '0'
-    tr_delay: '0'
-    tr_level: '65'
-    tr_mode: qtgui.TRIG_MODE_NORM
-    tr_slope: qtgui.TRIG_SLOPE_POS
-    tr_tag: '""'
-    type: float
-    update_time: '0.10'
-    width1: '1'
-    width10: '1'
-    width2: '1'
-    width3: '1'
-    width4: '1'
-    width5: '1'
-    width6: '1'
-    width7: '1'
-    width8: '1'
-    width9: '1'
-    ylabel: correlation
-    ymax: '1'
-    ymin: '-1'
-    yunit: '""'
-  states:
-    bus_sink: false
-    bus_source: false
-    bus_structure: null
-    coordinate: [1400, 864.0]
+    coordinate: [312, 704.0]
     rotation: 0
     state: disabled
 - name: rational_resampler_xxx_0
@@ -1035,7 +717,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [272, 440.0]
+    coordinate: [296, 400.0]
     rotation: 0
     state: enabled
 - name: soapy_rtlsdr_source_0
@@ -1072,7 +754,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1192, 208.0]
+    coordinate: [1200, 208.0]
     rotation: 0
     state: enabled
 - name: virtual_sink_1
@@ -1085,7 +767,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1752, 416.0]
+    coordinate: [1720, 376.0]
     rotation: 0
     state: enabled
 - name: virtual_source_0
@@ -1098,7 +780,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [96, 464.0]
+    coordinate: [96, 424.0]
     rotation: 0
     state: enabled
 - name: virtual_source_1
@@ -1111,7 +793,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [88, 696.0]
+    coordinate: [96, 600.0]
     rotation: 0
     state: enabled
 - name: zeromq_push_msg_sink_0
@@ -1127,7 +809,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [616, 688.0]
+    coordinate: [624, 592.0]
     rotation: 0
     state: enabled
 
@@ -1140,7 +822,6 @@ connections:
 - [blocks_throttle2_0, '0', blocks_freqshift_cc_0, '0']
 - [digital_symbol_sync_xx_0, '0', blocks_multiply_const_vxx_1, '0']
 - [epy_block_0, packet_out, zeromq_push_msg_sink_0, in]
-- [epy_block_2, '0', qtgui_time_sink_x_0, '0']
 - [fft_filter_xxx_0, '0', blocks_multiply_const_vxx_0, '0']
 - [fft_filter_xxx_1, '0', analog_pwr_squelch_xx_0, '0']
 - [rational_resampler_xxx_0, '0', analog_quadrature_demod_cf_0, '0']
