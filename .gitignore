@@ -43,3 +43,4 @@ archive/
 # Output files (if any)
 output.ambe
 *.ambe
+*.burst

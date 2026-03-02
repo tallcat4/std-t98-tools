@@ -344,8 +344,10 @@ def main():
     sync_word =[-3, +1, -3, +3, -3, -3, +3, +3, -1, +3]
 
     AMBE_FILE = "output.ambe"
+    BURST_FILE = "output.burst"
 
     open(AMBE_FILE, "wb").close()
+    open(BURST_FILE, "wb").close()
 
     frame_structure =[
         ("SW",    20),
@@ -485,8 +487,20 @@ def main():
                             
                             # 先頭に 0x48 (10進数で72) を付与して合計10バイトを書き込む
                             f_ambe.write(b'\x48' + block_bytes)
+                    
+                    # Burst ファイルに追記出力
+                    with open(BURST_FILE, "ab") as f_burst:
+                        # バースト開始マーク 0xFF を先頭に書き込む
+                        f_burst.write(b'\xFF')
+                        for block in blocks:
+                            # 72文字のビット文字列 ("0101...") を 9バイトのバイナリに変換 (Big-Endian)
+                            block_bytes = int(block, 2).to_bytes(9, byteorder='big')
+                            
+                            # 先頭に 0x48 を付与して書き込む
+                            f_burst.write(b'\x48' + block_bytes)
                             
                     print(f"    --> Appended 4 AMBE frames (10 bytes each) to '{AMBE_FILE}'")
+                    print(f"    --> Appended burst data to '{BURST_FILE}'")
             
             print("=" * 30)
 
