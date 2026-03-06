@@ -270,8 +270,7 @@ blocks:
   id: epy_block
   parameters:
     _source_code: "#!/usr/bin/env python3\n# -*- coding: utf-8 -*-\n\nimport numpy\
-      \ as np\nfrom gnuradio import gr\nimport zmq  # pmt \u306E\u4EE3\u308F\u308A\
-      \u306B zmq \u3092\u30A4\u30F3\u30DD\u30FC\u30C8\n\nclass sync_word_correlator(gr.sync_block):\n\
+      \ as np\nfrom gnuradio import gr\nimport zmq\n\nclass sync_word_correlator(gr.sync_block):\n\
       \    def __init__(self,\n                 sync_word=None,\n                \
       \ threshold_ratio=0.9,\n                 packet_len=192,\n                 abs_limit=4.0):\n\
       \        gr.sync_block.__init__(\n            self,\n            name=\"Sync\
@@ -279,44 +278,42 @@ blocks:
       \        )\n\n        if sync_word is None:\n            sync_word =[-3.0, +1.0,\
       \ -3.0, +3.0, -3.0, -3.0, +3.0, +3.0, -1.0, +3.0]\n        self.sync_word =\
       \ np.asarray(sync_word, dtype=np.float32)\n        self.sw_len = len(self.sync_word)\n\
+      \n        # \u540C\u671F\u30EF\u30FC\u30C9\u306E\u30A8\u30CD\u30EB\u30AE\u30FC\
       \n        sw_energy = float(np.dot(self.sync_word, self.sync_word))\n      \
-      \  self.correlation_threshold = sw_energy * float(threshold_ratio)\n\n     \
-      \   self.shift_register = np.zeros(self.sw_len, dtype=np.float32)\n\n      \
-      \  self.packet_len = int(packet_len)\n        if self.packet_len < self.sw_len:\n\
+      \  \n        self.error_threshold = sw_energy * 2.0 * (1.0 - float(threshold_ratio))\n\
+      \n        self.shift_register = np.zeros(self.sw_len, dtype=np.float32)\n\n\
+      \        self.packet_len = int(packet_len)\n        if self.packet_len < self.sw_len:\n\
       \            raise ValueError(\"packet_len must be >= length of sync_word\"\
       )\n        self.collecting = False\n        self.packet_buf = None\n       \
       \ self.samples_collected = 0\n        self.abs_limit = float(abs_limit)\n\n\
-      \        # ====== \u5909\u66F4\u70B9: ZMQ PUSH \u30BD\u30B1\u30C3\u30C8\u3092\
-      \u76F4\u63A5\u521D\u671F\u5316 ======\n        self.zmq_context = zmq.Context()\n\
-      \        self.zmq_socket = self.zmq_context.socket(zmq.PUSH)\n        self.zmq_socket.bind(\"\
-      tcp://127.0.0.1:5555\")\n\n        # \u53E4\u3044 pmt \u30E1\u30C3\u30BB\u30FC\
-      \u30B8\u30DD\u30FC\u30C8\u306E\u767B\u9332\u306F\u524A\u9664\n        # self.message_port_register_out(pmt.intern(\"\
-      packet_out\"))\n\n    def stop(self):\n        # \u30D6\u30ED\u30C3\u30AF\u505C\
-      \u6B62\u6642\u306BZMQ\u3092\u30AF\u30EA\u30FC\u30F3\u30A2\u30C3\u30D7\n    \
-      \    self.zmq_socket.close()\n        self.zmq_context.term()\n        return\
-      \ True\n\n    def _start_collection(self, initial_window):\n        self.packet_buf\
-      \ = np.empty(self.packet_len, dtype=np.float32)\n        self.packet_buf[:self.sw_len]\
-      \ = initial_window\n        self.samples_collected = self.sw_len\n        self.collecting\
-      \ = True\n\n    def _append_symbol(self, s):\n        if not self.collecting:\n\
-      \            return\n        if self.samples_collected < self.packet_len:\n\
-      \            self.packet_buf[self.samples_collected] = float(s)\n          \
-      \  self.samples_collected += 1\n        if self.samples_collected >= self.packet_len:\n\
-      \            \n            # ====== \u5909\u66F4\u70B9: PMT\u3092\u4F7F\u308F\
-      \u305A\u3001Numpy\u914D\u5217\u306E\u751F\u30D0\u30A4\u30C8\u5217\u3092\u305D\
-      \u306E\u307E\u307E\u9001\u4FE1 ======\n            self.zmq_socket.send(self.packet_buf.tobytes())\n\
-      \            \n            # \u30EA\u30BB\u30C3\u30C8\n            self.collecting\
-      \ = False\n            self.packet_buf = None\n            self.samples_collected\
-      \ = 0\n\n    def work(self, input_items, output_items):\n        # --- \u4EE5\
-      \u964D\u306F\u5143\u306E\u30B3\u30FC\u30C9\u3068\u540C\u3058 ---\n        in_data\
-      \ = input_items[0]\n        nread = len(in_data)\n\n        for i in range(nread):\n\
-      \            x = float(in_data[i])\n            if x > self.abs_limit: x = self.abs_limit\n\
-      \            elif x < -self.abs_limit: x = -self.abs_limit\n\n            if\
-      \ self.collecting:\n                self._append_symbol(x)\n            else:\n\
-      \                self.shift_register[:-1] = self.shift_register[1:]\n      \
-      \          self.shift_register[-1] = x\n                corr = float(np.dot(self.shift_register,\
-      \ self.sync_word))\n                if corr >= self.correlation_threshold:\n\
-      \                    self._start_collection(self.shift_register.copy())\n  \
-      \      return nread"
+      \        # ZMQ PUSH \u30BD\u30B1\u30C3\u30C8\u306E\u521D\u671F\u5316\n     \
+      \   self.zmq_context = zmq.Context()\n        self.zmq_socket = self.zmq_context.socket(zmq.PUSH)\n\
+      \        self.zmq_socket.bind(\"tcp://127.0.0.1:5555\")\n\n    def stop(self):\n\
+      \        # \u30D6\u30ED\u30C3\u30AF\u505C\u6B62\u6642\u306BZMQ\u3092\u30AF\u30EA\
+      \u30FC\u30F3\u30A2\u30C3\u30D7\n        self.zmq_socket.close()\n        self.zmq_context.term()\n\
+      \        return True\n\n    def _start_collection(self, initial_window):\n \
+      \       self.packet_buf = np.empty(self.packet_len, dtype=np.float32)\n    \
+      \    self.packet_buf[:self.sw_len] = initial_window\n        self.samples_collected\
+      \ = self.sw_len\n        self.collecting = True\n\n    def _append_symbol(self,\
+      \ s):\n        if not self.collecting:\n            return\n        if self.samples_collected\
+      \ < self.packet_len:\n            self.packet_buf[self.samples_collected] =\
+      \ float(s)\n            self.samples_collected += 1\n        if self.samples_collected\
+      \ >= self.packet_len:\n            # Numpy\u914D\u5217\u306E\u751F\u30D0\u30A4\
+      \u30C8\u5217\u3092\u305D\u306E\u307E\u307E\u9001\u4FE1\n            self.zmq_socket.send(self.packet_buf.tobytes())\n\
+      \            # \u30EA\u30BB\u30C3\u30C8\n            self.collecting = False\n\
+      \            self.packet_buf = None\n            self.samples_collected = 0\n\
+      \n    def work(self, input_items, output_items):\n        in_data = input_items[0]\n\
+      \        nread = len(in_data)\n\n        for i in range(nread):\n          \
+      \  x = float(in_data[i])\n            # \u30AF\u30EA\u30C3\u30D7\u51E6\u7406\
+      \ (abs_limit\u306B\u3088\u308B\u5236\u9650)\n            if x > self.abs_limit:\
+      \ x = self.abs_limit\n            elif x < -self.abs_limit: x = -self.abs_limit\n\
+      \n            if self.collecting:\n                self._append_symbol(x)\n\
+      \            else:\n                self.shift_register[:-1] = self.shift_register[1:]\n\
+      \                self.shift_register[-1] = x\n                \n           \
+      \     error = float(np.sum((self.shift_register - self.sync_word) ** 2))\n \
+      \               \n                if error <= self.error_threshold:\n      \
+      \              self._start_collection(self.shift_register.copy())\n        \
+      \            \n        return nread"
     abs_limit: '4.0'
     affinity: ''
     alias: ''

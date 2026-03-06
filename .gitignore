@@ -44,3 +44,6 @@ archive/
 output.ambe
 *.ambe
 *.burst
+
+# Package files
+pyambelib-source/
