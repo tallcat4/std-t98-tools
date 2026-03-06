@@ -1,7 +1,6 @@
 # recv_float_rich_decode.py
 import zmq
 import numpy as np
-import pmt
 import time
 import collections
 import os
@@ -363,12 +362,13 @@ def main():
         sock.connect("tcp://127.0.0.1:5555")
 
         last_recv_time = time.time()
-        dt_history = collections.deque(maxlen=2)
+        dt_history = collections.deque(maxlen=10)
 
-        print("Waiting for Float PDU... (Press Ctrl+C to exit)")
+        print("Waiting for Raw Float Data... (Press Ctrl+C to exit)")
         
         while True:
-            frames = sock.recv_multipart()
+            # ====== 変更点: ZMQから直接バイナリデータを受信 ======
+            raw_bytes = sock.recv()
             
             current_time = time.time()
             dt = (current_time - last_recv_time) * 1000
@@ -377,12 +377,14 @@ def main():
             dt_history.append(dt)
             avg_dt = sum(dt_history) / len(dt_history)
             
-            serialized_pdu = frames[-1]
-            pdu = pmt.deserialize_str(serialized_pdu)
-            payload_pmt = pmt.cdr(pdu)
-            
-            raw_floats = np.array(pmt.to_python(payload_pmt), dtype=np.float32)
+            # ====== 変更点: バイト列を numpy の float32 配列に直接変換 ======
+            raw_floats = np.frombuffer(raw_bytes, dtype=np.float32)
 
+            # パケット長が192であることを一応確認（安全策）
+            if len(raw_floats) != 192:
+                continue
+
+            # --- 以降のシンボル判定・復号処理は元のまま ---
             symbols = np.zeros(raw_floats.shape, dtype=np.int8)
             symbols[raw_floats > 2.0] = 3
             symbols[(raw_floats > 0.0) & (raw_floats <= 2.0)] = 1
