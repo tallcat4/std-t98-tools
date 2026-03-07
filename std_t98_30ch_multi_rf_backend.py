@@ -5,7 +5,6 @@
 # SPDX-License-Identifier: GPL-3.0
 #
 # GNU Radio Python Flow Graph
-# Title: DCR 30CH Receiver (Original Quality)
 # GNU Radio version: 3.10.12.0
 
 from gnuradio import analog
@@ -46,13 +45,13 @@ class test3(gr.top_block):
         ##################################################
         # 2. Resampling & Channelization Rates
         ##################################################
-        # Stage 1: Initial Decimation (1.2MHz -> 200kHz)
+        # Stage 1: Initial Decimation
         self.resamp1_interp = resamp1_interp = 1
-        self.resamp1_decim = resamp1_decim = 6
+        self.resamp1_decim = resamp1_decim = 4  
         self.samp_rate_post_resamp1 = samp_rate_post_resamp1 = rf_samp_rate * resamp1_interp / resamp1_decim
         
         # Stage 2: PFB Channelizer
-        self.pfb_num_channels = pfb_num_channels = 32
+        self.pfb_num_channels = pfb_num_channels = 48
         self.num_channels = num_channels = 30
         self.samp_rate_post_pfb = samp_rate_post_pfb = samp_rate_post_resamp1 / pfb_num_channels
         
@@ -76,7 +75,6 @@ class test3(gr.top_block):
         self.baud_rate = baud_rate = 2400
         self.sps = sps = demod_samp_rate / baud_rate 
         
-        # Filter Taps Setup
         self.excess_bw = excess_bw = 0.2
         self.filter_ntaps_per_sym = filter_ntaps_per_sym = 20
         self.filter_ntaps = filter_ntaps = int(sps) * filter_ntaps_per_sym 
@@ -174,11 +172,18 @@ class test3(gr.top_block):
             1.0
         )
         
+        # CH1(-93.75k) = Bin 33, CH15(-6.25k) = Bin 47
+        # CH16(0) = Bin 0
+        # CH17(+6.25k) = Bin 1, CH30(+87.5k) = Bin 14
         self.channel_map = [
-            17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, # Port 0-14  (CH1-15)
-            0,                                                          # Port 15    (CH16)
-            1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14,     # Port 16-29 (CH17-30)
-            15, 16                                                      # Port 30-31 (Unused)
+            # Port 0-14  (CH1-15) -> Bin 33-47
+            33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
+            # Port 15    (CH16) -> Bin 0
+            0,
+            # Port 16-29 (CH17-30) -> Bin 1-14
+            1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14,
+            # Port 30-47 (Unused) -> Bin 15-32 (Null Sink)
+            15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32
         ]
         self.pfb_channelizer_ccf_0.set_channel_map(self.channel_map)
         

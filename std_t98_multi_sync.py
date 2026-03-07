@@ -68,7 +68,7 @@ class sync_word_correlator(gr.sync_block):
             self.samples_collected[ch] += 1
             
         if self.samples_collected[ch] >= self.packet_len:
-            ch_header = struct.pack('<I', ch)
+            ch_header = struct.pack('<I', ch + 1)
             payload = self.packet_bufs[ch].tobytes()
             
             self.zmq_socket.send(ch_header + payload)
@@ -96,5 +96,4 @@ class sync_word_correlator(gr.sync_block):
                     
                     if sse <= self.error_threshold:
                         self._start_collection(ch, self.shift_registers[ch].copy())
-                        
         return nread
