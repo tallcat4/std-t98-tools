@@ -111,7 +111,7 @@ python3 std_t98_realtime_receiver.py
 
 ```bash
 python3 std_t98_30ch_multi_rf_backend.py &
-python3 "std_t98_multi_frame_decoder .py"
+python3 std_t98_multi_frame_decoder.py
 ```
 
 ### マルチチャンネル受信（最大30ch同時・リアルタイム音声再生）
