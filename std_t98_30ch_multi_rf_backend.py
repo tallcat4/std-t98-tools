@@ -112,9 +112,7 @@ class test3(gr.top_block):
         ##################################################
         # 7. Sync Word Correlator Setup
         ##################################################
-        self.zmq_ip = zmq_ip = "127.0.0.1"
-        self.zmq_port = zmq_port = 5555
-        self.sync_error_threshold = sync_error_threshold = 0.2
+        self.sync_error_threshold_ratio = sync_error_threshold_ratio = 0.2
         self.sync_packet_len = sync_packet_len = 192
 
         ##################################################
@@ -231,10 +229,8 @@ class test3(gr.top_block):
 
         self.sync_word_corr = sync_word_corr.sync_word_correlator(
             num_channels=num_channels,
-            zmq_ip=zmq_ip,
-            zmq_port=zmq_port,
             sync_word=None,
-            error_threshold_ratio=sync_error_threshold,
+            error_threshold_ratio=sync_error_threshold_ratio,
             packet_len=sync_packet_len)
 
         ##################################################

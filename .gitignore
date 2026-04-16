@@ -1,8 +1,3 @@
-# GNU Radio auto-generated files
-# (Regenerate from .grc files as needed)
-std_t98_rf_backend.py
-std_t98_rf_backend_epy_block_*.py
-
 # Python cache
 __pycache__/
 *.py[cod]
@@ -39,8 +34,3 @@ htmlcov/
 
 # Archive (development/experimental code)
 archive/
-
-# Output files (if any)
-output.ambe
-*.ambe
-*.burst
