@@ -4,7 +4,12 @@ import numpy as np
 from ipc.message_schema import (
     FRAME_FLAG_SYNC_DETECTED,
     FramePacket,
+    SECRET_BURST_BYTES_AMBE_2450,
+    SECRET_RESULT_FULL_SEARCH,
+    STATUS_SOURCE_SECRET,
     STATUS_SOURCE_PROTOCOL,
+    SecretCrackRequestPacket,
+    SecretCrackResultPacket,
     StatusPacket,
     VOICE_FORMAT_AMBE_2450,
     VOICE_FORMAT_RAW_3600,
@@ -116,3 +121,57 @@ def test_status_packet_roundtrip():
         "rx_status": "OPEN",
         "protocol_status": "Sync Burst",
     }
+
+
+def test_secret_crack_request_packet_roundtrip():
+    payload = bytes(range(SECRET_BURST_BYTES_AMBE_2450 * 5))
+    packet = SecretCrackRequestPacket(
+        sequence=44,
+        channel_id=9,
+        session_id=3,
+        current_key=123,
+        burst_count=5,
+        payload=payload,
+    )
+
+    decoded = SecretCrackRequestPacket.decode(packet.encode())
+
+    assert decoded.sequence == 44
+    assert decoded.channel_id == 9
+    assert decoded.session_id == 3
+    assert decoded.current_key == 123
+    assert decoded.burst_count == 5
+    assert decoded.payload == payload
+
+
+def test_secret_crack_result_packet_roundtrip():
+    packet = SecretCrackResultPacket(
+        sequence=45,
+        channel_id=10,
+        session_id=4,
+        resolved_key=32767,
+        result_source=SECRET_RESULT_FULL_SEARCH,
+    )
+
+    decoded = SecretCrackResultPacket.decode(packet.encode())
+
+    assert decoded.sequence == 45
+    assert decoded.channel_id == 10
+    assert decoded.session_id == 4
+    assert decoded.resolved_key == 32767
+    assert decoded.result_source == SECRET_RESULT_FULL_SEARCH
+
+
+def test_status_packet_supports_secret_source():
+    packet = StatusPacket.from_dict(
+        sequence=13,
+        monotonic_ns=123,
+        source=STATUS_SOURCE_SECRET,
+        channel_id=8,
+        payload_dict={"event": "channel_state", "secret_status": "Full Search Hit", "secret_key": 42},
+    )
+
+    decoded = StatusPacket.decode(packet.encode())
+
+    assert decoded.source == STATUS_SOURCE_SECRET
+    assert decoded.to_dict()["secret_key"] == 42

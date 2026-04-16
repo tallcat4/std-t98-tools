@@ -3,6 +3,7 @@
 
 import argparse
 import os
+import signal
 import shutil
 import subprocess
 import sys
@@ -11,12 +12,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.pipeline.multi_stack_dashboard import ChannelView, ProcessView, print_stack_dashboard
-from ipc.message_schema import STATUS_SOURCE_AUDIO, STATUS_SOURCE_PROTOCOL, StatusPacket
+from ipc.message_schema import STATUS_SOURCE_AUDIO, STATUS_SOURCE_PROTOCOL, STATUS_SOURCE_SECRET, StatusPacket
 from ipc.transport.uds_seqpacket import UdsSeqpacketReceiver, resolve_status_socket_path
 
 
 BACKEND_IMPORT_CHECKS = ("from gnuradio import gr", "from gnuradio import soapy")
-SERVICE_IMPORT_CHECKS = ("import pyambelib", "import sounddevice")
+SERVICE_IMPORT_CHECKS = (
+    "import pyambelib",
+    "import sounddevice",
+    "import torch",
+    "from safetensors.torch import load_file",
+)
 IMPORT_CHECK_CODE = (
     "import sys\n"
     "for statement in sys.argv[1:]:\n"
@@ -39,12 +45,21 @@ class ProcessSpec:
 def _terminate_processes(processes):
     for process in processes:
         if process.poll() is None:
-            process.terminate()
+            process.send_signal(signal.SIGINT)
 
     for process in processes:
         if process.poll() is not None:
             continue
         try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+
+    for process in processes:
+        if process.poll() is not None:
+            continue
+        try:
+            process.terminate()
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
@@ -128,6 +143,12 @@ def build_process_specs(repo_root, service_python, status_socket_path=None, back
             args=("--headless", "--status-socket", status_socket_path) if status_socket_path else ("--headless",),
         ),
         ProcessSpec(
+            "secret",
+            service_python,
+            repo_root / "std_t98_multi_secret_service.py",
+            args=("--headless", "--status-socket", status_socket_path) if status_socket_path else ("--headless",),
+        ),
+        ProcessSpec(
             "audio",
             service_python,
             repo_root / "std_t98_multi_audio_service.py",
@@ -182,10 +203,38 @@ def _apply_status_payload(channels, source, channel_id, payload_dict):
             if channel.audio_status != "Idle":
                 channel.audio_status = "Idle"
                 changed = True
+            if channel.secret_status != "Idle":
+                channel.secret_status = "Idle"
+                changed = True
     elif source == STATUS_SOURCE_AUDIO:
         new_audio_status = payload_dict.get("audio_status", channel.audio_status)
         if channel.audio_status != new_audio_status:
             channel.audio_status = new_audio_status
+            changed = True
+
+        new_secret_status = payload_dict.get("secret_status", channel.secret_status)
+        if channel.secret_status != new_secret_status:
+            channel.secret_status = new_secret_status
+            changed = True
+
+        new_secret_key = payload_dict.get("secret_key", channel.secret_key)
+        if channel.secret_key != new_secret_key:
+            channel.secret_key = new_secret_key
+            changed = True
+    elif source == STATUS_SOURCE_SECRET:
+        new_secret_status = payload_dict.get("secret_status", channel.secret_status)
+        if channel.secret_status != new_secret_status:
+            channel.secret_status = new_secret_status
+            changed = True
+
+        new_secret_key = payload_dict.get("secret_key", channel.secret_key)
+        if channel.secret_key != new_secret_key:
+            channel.secret_key = new_secret_key
+            changed = True
+
+        new_secret_cache_keys = tuple(payload_dict.get("secret_cache_keys", channel.secret_cache_keys))
+        if channel.secret_cache_keys != new_secret_cache_keys:
+            channel.secret_cache_keys = new_secret_cache_keys
             changed = True
 
     if changed:

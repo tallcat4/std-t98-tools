@@ -17,6 +17,14 @@ DEFAULT_MULTI_STATUS_SOCKET_PATH = os.environ.get(
     "STD_T98_MULTI_STATUS_SOCKET",
     "/tmp/std_t98_multi_status.sock",
 )
+DEFAULT_MULTI_SECRET_REQUEST_SOCKET_PATH = os.environ.get(
+    "STD_T98_MULTI_SECRET_REQUEST_SOCKET",
+    "/tmp/std_t98_multi_secret_request.sock",
+)
+DEFAULT_MULTI_SECRET_RESULT_SOCKET_PATH = os.environ.get(
+    "STD_T98_MULTI_SECRET_RESULT_SOCKET",
+    "/tmp/std_t98_multi_secret_result.sock",
+)
 
 
 def resolve_frame_socket_path(channel_count=1, socket_path=None):
@@ -32,6 +40,16 @@ def resolve_voice_socket_path(channel_count=1, socket_path=None):
 def resolve_status_socket_path(channel_count=1, socket_path=None):
     del channel_count
     return socket_path or DEFAULT_MULTI_STATUS_SOCKET_PATH
+
+
+def resolve_secret_request_socket_path(channel_count=1, socket_path=None):
+    del channel_count
+    return socket_path or DEFAULT_MULTI_SECRET_REQUEST_SOCKET_PATH
+
+
+def resolve_secret_result_socket_path(channel_count=1, socket_path=None):
+    del channel_count
+    return socket_path or DEFAULT_MULTI_SECRET_RESULT_SOCKET_PATH
 
 
 class UdsSeqpacketServer:

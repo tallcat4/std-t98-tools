@@ -9,6 +9,8 @@ MESSAGE_VERSION = 1
 MSG_TYPE_FRAME = 1
 MSG_TYPE_VOICE_BURST = 2
 MSG_TYPE_STATUS = 3
+MSG_TYPE_SECRET_CRACK_REQUEST = 4
+MSG_TYPE_SECRET_CRACK_RESULT = 5
 
 FRAME_FLAG_SYNC_DETECTED = 1 << 0
 FRAME_FLAG_CLIPPED = 1 << 1
@@ -23,10 +25,20 @@ VOICE_BURST_BLOCK_BYTES_AMBE_2450 = 7
 STATUS_SOURCE_PROTOCOL = 1
 STATUS_SOURCE_AUDIO = 2
 STATUS_SOURCE_LAUNCHER = 3
+STATUS_SOURCE_SECRET = 4
+
+SECRET_RESULT_NONE = 0
+SECRET_RESULT_CURRENT_KEY = 1
+SECRET_RESULT_GLOBAL_CACHE = 2
+SECRET_RESULT_FULL_SEARCH = 3
 
 FRAME_HEADER = struct.Struct("<HHIQHHHH")
 VOICE_HEADER = struct.Struct("<HHIHBHIBB")
 STATUS_HEADER = struct.Struct("<HHIQHHI")
+SECRET_REQUEST_HEADER = struct.Struct("<HHIHHHBB")
+SECRET_RESULT_HEADER = struct.Struct("<HHIHHHBB")
+
+SECRET_BURST_BYTES_AMBE_2450 = VOICE_BURST_BLOCK_BYTES_AMBE_2450 * 4
 
 
 def _voice_payload_block_size(payload_format: int) -> int:
@@ -205,4 +217,104 @@ class StatusPacket:
             source=source,
             channel_id=channel_id,
             payload=status_payload,
+        )
+
+
+@dataclass(frozen=True)
+class SecretCrackRequestPacket:
+    sequence: int
+    channel_id: int
+    session_id: int
+    current_key: int
+    burst_count: int
+    payload: bytes
+
+    def encode(self) -> bytes:
+        if self.burst_count <= 0 or self.burst_count > 0xFF:
+            raise ValueError("Secret crack request burst count must be between 1 and 255.")
+
+        expected_size = self.burst_count * SECRET_BURST_BYTES_AMBE_2450
+        if len(self.payload) != expected_size:
+            raise ValueError(
+                f"Secret crack request payload size mismatch: expected {expected_size} bytes, got {len(self.payload)} bytes."
+            )
+
+        return SECRET_REQUEST_HEADER.pack(
+            MESSAGE_VERSION,
+            MSG_TYPE_SECRET_CRACK_REQUEST,
+            self.sequence,
+            self.channel_id,
+            self.session_id,
+            self.current_key,
+            self.burst_count,
+            0,
+        ) + self.payload
+
+    @classmethod
+    def decode(cls, payload: bytes):
+        if len(payload) < SECRET_REQUEST_HEADER.size:
+            raise ValueError("Secret crack request packet is shorter than the header size.")
+
+        version, msg_type, sequence, channel_id, session_id, current_key, burst_count, _ = SECRET_REQUEST_HEADER.unpack(
+            payload[: SECRET_REQUEST_HEADER.size]
+        )
+        if version != MESSAGE_VERSION:
+            raise ValueError(f"Unsupported message version: {version}")
+        if msg_type != MSG_TYPE_SECRET_CRACK_REQUEST:
+            raise ValueError(f"Unsupported message type: {msg_type}")
+
+        burst_payload = payload[SECRET_REQUEST_HEADER.size:]
+        expected_size = burst_count * SECRET_BURST_BYTES_AMBE_2450
+        if len(burst_payload) != expected_size:
+            raise ValueError("Secret crack request payload size mismatch.")
+
+        return cls(
+            sequence=sequence,
+            channel_id=channel_id,
+            session_id=session_id,
+            current_key=current_key,
+            burst_count=burst_count,
+            payload=burst_payload,
+        )
+
+
+@dataclass(frozen=True)
+class SecretCrackResultPacket:
+    sequence: int
+    channel_id: int
+    session_id: int
+    resolved_key: int
+    result_source: int
+
+    def encode(self) -> bytes:
+        return SECRET_RESULT_HEADER.pack(
+            MESSAGE_VERSION,
+            MSG_TYPE_SECRET_CRACK_RESULT,
+            self.sequence,
+            self.channel_id,
+            self.session_id,
+            self.resolved_key,
+            self.result_source,
+            0,
+        )
+
+    @classmethod
+    def decode(cls, payload: bytes):
+        if len(payload) != SECRET_RESULT_HEADER.size:
+            raise ValueError("Secret crack result packet size mismatch.")
+
+        version, msg_type, sequence, channel_id, session_id, resolved_key, result_source, _ = SECRET_RESULT_HEADER.unpack(
+            payload
+        )
+        if version != MESSAGE_VERSION:
+            raise ValueError(f"Unsupported message version: {version}")
+        if msg_type != MSG_TYPE_SECRET_CRACK_RESULT:
+            raise ValueError(f"Unsupported message type: {msg_type}")
+
+        return cls(
+            sequence=sequence,
+            channel_id=channel_id,
+            session_id=session_id,
+            resolved_key=resolved_key,
+            result_source=result_source,
         )

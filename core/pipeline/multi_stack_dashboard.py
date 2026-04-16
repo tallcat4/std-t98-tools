@@ -18,6 +18,9 @@ class ChannelView:
     rx_status: str = "CLOSE"
     protocol_status: str = "Waiting"
     audio_status: str = "Idle"
+    secret_status: str = "Idle"
+    secret_key: int = 0
+    secret_cache_keys: tuple[int, ...] = ()
     csm: str | None = None
     sacch: dict | None = None
     last_update: float = field(default_factory=time.time)
@@ -59,6 +62,12 @@ def print_stack_dashboard(processes, channels, num_lines_last_time, mode_label="
     sys.stdout.write("\033[K" + "-" * 70 + "\n")
     lines += 1
 
+    cache_keys = next((channel.secret_cache_keys for channel in channels.values() if channel.secret_cache_keys), ())
+    cache_text = ", ".join(f"{key:05d}" for key in cache_keys) if cache_keys else "(empty)"
+    sys.stdout.write(f"\033[KSecret Cache: {cache_text}\n")
+    sys.stdout.write("\033[K" + "-" * 70 + "\n")
+    lines += 2
+
     if not channels:
         sys.stdout.write("\033[K  Waiting for channel activity...\n")
         lines += 1
@@ -85,8 +94,11 @@ def print_stack_dashboard(processes, channels, num_lines_last_time, mode_label="
             )
             sys.stdout.write(f"\033[K  > CSM   : {csm_str}\n")
             sys.stdout.write(f"\033[K  > SACCH : {sacch_str}\n")
+            sys.stdout.write(
+                f"\033[K  > Secret: key={channel.secret_key:05d} | {channel.secret_status}\n"
+            )
             sys.stdout.write("\033[K" + "-" * 70 + "\n")
-            lines += 4
+            lines += 5
 
     sys.stdout.flush()
     return lines
