@@ -1,3 +1,6 @@
+import errno
+import socket
+
 import numpy as np
 import pytest
 
@@ -89,3 +92,50 @@ def test_uds_seqpacket_receiver_accepts_multiple_clients(tmp_path):
         client_a.close()
         client_b.close()
         receiver.close()
+
+
+def test_uds_seqpacket_server_preserves_client_on_backpressure(monkeypatch):
+    class FakeClient:
+        def send(self, payload):
+            del payload
+            raise BlockingIOError(errno.EAGAIN, "socket buffer full")
+
+    server = UdsSeqpacketServer.__new__(UdsSeqpacketServer)
+    server.client = FakeClient()
+    server._accept_client = lambda: True
+    drop_calls = []
+
+    def fake_drop_client():
+        drop_calls.append(True)
+
+    monkeypatch.setattr(server, "_drop_client", fake_drop_client)
+
+    assert server.send(b"payload") is False
+    assert drop_calls == []
+
+
+def test_uds_seqpacket_client_try_send_returns_false_on_backpressure():
+    class FakeSocket:
+        def send(self, payload, flags=0):
+            del payload, flags
+            raise BlockingIOError(errno.EAGAIN, "socket buffer full")
+
+    client = UdsSeqpacketClient.__new__(UdsSeqpacketClient)
+    client.socket = FakeSocket()
+
+    assert client.try_send(b"payload") is False
+
+
+def test_uds_seqpacket_client_try_send_uses_nonblocking_flag():
+    calls = []
+
+    class FakeSocket:
+        def send(self, payload, flags=0):
+            calls.append((payload, flags))
+            return len(payload)
+
+    client = UdsSeqpacketClient.__new__(UdsSeqpacketClient)
+    client.socket = FakeSocket()
+
+    assert client.try_send(b"payload") is True
+    assert calls == [(b"payload", getattr(socket, "MSG_DONTWAIT", 0))]

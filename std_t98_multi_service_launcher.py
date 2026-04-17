@@ -32,6 +32,7 @@ IMPORT_CHECK_CODE = (
     "        sys.exit(1)\n"
     "sys.exit(0)\n"
 )
+IMPORT_CHECK_TIMEOUT_SEC = 5.0
 
 
 @dataclass(frozen=True)
@@ -111,13 +112,22 @@ def _existing_candidates(candidate_paths):
 
 
 def _python_supports_import_checks(python_executable, import_checks):
-    result = subprocess.run(
-        [str(python_executable), "-c", IMPORT_CHECK_CODE, *import_checks],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        check=False,
-    )
-    return result.returncode == 0
+    for import_check in import_checks:
+        try:
+            result = subprocess.run(
+                [str(python_executable), "-c", IMPORT_CHECK_CODE, import_check],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=IMPORT_CHECK_TIMEOUT_SEC,
+            )
+        except subprocess.TimeoutExpired:
+            return False
+
+        if result.returncode != 0:
+            return False
+
+    return True
 
 
 def _resolve_python(override, candidate_paths, import_checks, role_name):

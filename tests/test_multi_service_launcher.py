@@ -1,10 +1,13 @@
 import signal
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
 from std_t98_multi_service_launcher import (
+    IMPORT_CHECK_TIMEOUT_SEC,
     ProcessSpec,
     _apply_status_payload,
+    _python_supports_import_checks,
     _spawn_process,
     _terminate_processes,
     build_process_specs,
@@ -203,3 +206,44 @@ def test_apply_status_payload_updates_secret_fields():
     assert channels[7].secret_status == "Global Cache Hit"
     assert channels[7].secret_key == 42
     assert channels[7].secret_cache_keys == (42, 77)
+
+
+def test_python_supports_import_checks_runs_each_statement_separately(monkeypatch):
+    commands = []
+
+    def fake_run(command, stdout, stderr, check, timeout):
+        del stdout, stderr, check, timeout
+        commands.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr("std_t98_multi_service_launcher.subprocess.run", fake_run)
+
+    assert _python_supports_import_checks(Path("/tmp/python"), ("import sounddevice", "import torch")) is True
+    assert commands == [
+        ["/tmp/python", "-c", "import sys\nfor statement in sys.argv[1:]:\n    try:\n        exec(statement, {})\n    except Exception:\n        sys.exit(1)\nsys.exit(0)\n", "import sounddevice"],
+        ["/tmp/python", "-c", "import sys\nfor statement in sys.argv[1:]:\n    try:\n        exec(statement, {})\n    except Exception:\n        sys.exit(1)\nsys.exit(0)\n", "import torch"],
+    ]
+
+
+def test_python_supports_import_checks_returns_false_on_timeout(monkeypatch):
+    def fake_run(command, stdout, stderr, check, timeout):
+        del stdout, stderr, check
+        raise subprocess.TimeoutExpired(command, timeout)
+
+    monkeypatch.setattr("std_t98_multi_service_launcher.subprocess.run", fake_run)
+
+    assert _python_supports_import_checks(Path("/tmp/python"), ("import sounddevice",)) is False
+
+
+def test_python_supports_import_checks_uses_timeout(monkeypatch):
+    timeouts = []
+
+    def fake_run(command, stdout, stderr, check, timeout):
+        del command, stdout, stderr, check
+        timeouts.append(timeout)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr("std_t98_multi_service_launcher.subprocess.run", fake_run)
+
+    assert _python_supports_import_checks(Path("/tmp/python"), ("import sounddevice",)) is True
+    assert timeouts == [IMPORT_CHECK_TIMEOUT_SEC]

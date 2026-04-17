@@ -5,6 +5,24 @@ import socket
 import time
 
 
+_TEMPORARY_SEND_ERRNOS = {
+    errno.EAGAIN,
+    getattr(errno, "EWOULDBLOCK", errno.EAGAIN),
+    getattr(errno, "ENOBUFS", errno.EAGAIN),
+    errno.EINTR,
+}
+
+
+def _is_temporary_send_error(exc: OSError) -> bool:
+    return exc.errno in _TEMPORARY_SEND_ERRNOS
+
+
+def _validate_packet_send(sent: int, payload: bytes) -> int:
+    if sent != len(payload):
+        raise OSError(errno.EPIPE, "partial packet send")
+    return sent
+
+
 DEFAULT_MULTI_FRAME_SOCKET_PATH = os.environ.get(
     "STD_T98_MULTI_FRAME_SOCKET",
     "/tmp/std_t98_multi_frame.sock",
@@ -91,11 +109,11 @@ class UdsSeqpacketServer:
             return False
 
         try:
-            sent = self.client.send(payload)
-            if sent != len(payload):
-                raise OSError(errno.EPIPE, "partial packet send")
+            _validate_packet_send(self.client.send(payload), payload)
             return True
-        except OSError:
+        except OSError as exc:
+            if _is_temporary_send_error(exc):
+                return False
             self._drop_client()
             return False
 
@@ -130,8 +148,20 @@ class UdsSeqpacketClient:
     def fileno(self):
         return self.socket.fileno()
 
+    def _send(self, payload: bytes, flags: int = 0) -> int:
+        return _validate_packet_send(self.socket.send(payload, flags), payload)
+
     def send(self, payload: bytes):
-        return self.socket.send(payload)
+        return self._send(payload)
+
+    def try_send(self, payload: bytes) -> bool:
+        try:
+            self._send(payload, getattr(socket, "MSG_DONTWAIT", 0))
+            return True
+        except OSError as exc:
+            if _is_temporary_send_error(exc):
+                return False
+            raise
 
     def recv(self, max_size=65536):
         return self.socket.recv(max_size)

@@ -37,8 +37,7 @@ class StatusPublisher:
             payload_dict=payload_dict or {},
         )
         self.sequence += 1
-        self.client.send(packet.encode())
-        return True
+        return self.client.try_send(packet.encode())
 
     def close(self):
         if self.client is None:
