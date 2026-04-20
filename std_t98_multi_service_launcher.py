@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from core.pipeline.multi_stack_dashboard import ChannelView, ProcessView, print_stack_dashboard
-from ipc.message_schema import STATUS_SOURCE_AUDIO, STATUS_SOURCE_PROTOCOL, STATUS_SOURCE_SECRET, StatusPacket
+from ipc.message_schema import STATUS_SOURCE_AUDIO, STATUS_SOURCE_PROTOCOL, STATUS_SOURCE_RF, STATUS_SOURCE_SECRET, StatusPacket
 from ipc.transport.uds_seqpacket import UdsSeqpacketReceiver, resolve_status_socket_path
 
 
@@ -33,6 +33,12 @@ IMPORT_CHECK_CODE = (
     "sys.exit(0)\n"
 )
 IMPORT_CHECK_TIMEOUT_SEC = 5.0
+SOURCE_PROCESS_NAMES = {
+    STATUS_SOURCE_PROTOCOL: "protocol",
+    STATUS_SOURCE_AUDIO: "audio",
+    STATUS_SOURCE_SECRET: "secret",
+    STATUS_SOURCE_RF: "backend",
+}
 
 
 @dataclass(frozen=True)
@@ -91,6 +97,11 @@ def _parse_args(argv=None):
         "--passthrough-output",
         action="store_true",
         help="Let child processes write directly to the terminal for debugging.",
+    )
+    parser.add_argument(
+        "--show-debug-metrics",
+        action="store_true",
+        help="Render per-service and per-channel debug metrics published over the status socket.",
     )
     return parser.parse_args(argv)
 
@@ -167,6 +178,8 @@ def build_process_specs(repo_root, service_python, status_socket_path=None, back
     ]
 
     if include_backend:
+        if backend_python is None:
+            raise ValueError("backend_python is required when include_backend is True")
         process_specs.append(ProcessSpec("backend", Path(backend_python), repo_root / "std_t98_30ch_multi_rf_backend.py"))
 
     return process_specs
@@ -203,6 +216,7 @@ def _apply_status_payload(channels, source, channel_id, payload_dict):
             ("protocol_status", "protocol_status"),
             ("csm", "csm"),
             ("sacch", "sacch"),
+            ("protocol_debug", "protocol_debug"),
         ):
             new_value = payload_dict.get(payload_key, getattr(channel, field_name))
             if getattr(channel, field_name) != new_value:
@@ -220,6 +234,11 @@ def _apply_status_payload(channels, source, channel_id, payload_dict):
         new_audio_status = payload_dict.get("audio_status", channel.audio_status)
         if channel.audio_status != new_audio_status:
             channel.audio_status = new_audio_status
+            changed = True
+
+        new_audio_debug = payload_dict.get("audio_debug", channel.audio_debug)
+        if channel.audio_debug != new_audio_debug:
+            channel.audio_debug = new_audio_debug
             changed = True
 
         new_secret_status = payload_dict.get("secret_status", channel.secret_status)
@@ -246,10 +265,35 @@ def _apply_status_payload(channels, source, channel_id, payload_dict):
         if channel.secret_cache_keys != new_secret_cache_keys:
             channel.secret_cache_keys = new_secret_cache_keys
             changed = True
+    elif source == STATUS_SOURCE_RF:
+        new_rf_debug = payload_dict.get("rf_debug", channel.rf_debug)
+        if channel.rf_debug != new_rf_debug:
+            channel.rf_debug = new_rf_debug
+            changed = True
 
     if changed:
         channel.last_update = time.time()
     return changed
+
+
+def _apply_service_payload(process_views_by_name, source, payload_dict):
+    if payload_dict.get("event") != "service_metrics":
+        return False
+
+    process_name = SOURCE_PROCESS_NAMES.get(source)
+    if process_name is None:
+        return False
+
+    process_view = process_views_by_name.get(process_name)
+    if process_view is None:
+        return False
+
+    summary = payload_dict.get("summary", "")
+    if process_view.detail == summary:
+        return False
+
+    process_view.detail = summary
+    return True
 
 
 def main(argv=None):
@@ -322,6 +366,7 @@ def main(argv=None):
         channels=channels,
         num_lines_last_time=0,
         mode_label="services-only" if args.services_only else "full-stack",
+        show_debug_metrics=args.show_debug_metrics,
     )
 
     for process_spec, process_view in zip(process_specs, process_views):
@@ -339,7 +384,10 @@ def main(argv=None):
         channels=channels,
         num_lines_last_time=printed_lines,
         mode_label="services-only" if args.services_only else "full-stack",
+        show_debug_metrics=args.show_debug_metrics,
     )
+
+    process_views_by_name = {process_view.name: process_view for process_view in process_views}
 
     try:
         while True:
@@ -348,7 +396,9 @@ def main(argv=None):
             payload = status_receiver.recv(timeout_ms=100)
             while payload is not None:
                 packet = StatusPacket.decode(payload)
-                dashboard_changed = _apply_status_payload(channels, packet.source, packet.channel_id, packet.to_dict()) or dashboard_changed
+                payload_dict = packet.to_dict()
+                dashboard_changed = _apply_service_payload(process_views_by_name, packet.source, payload_dict) or dashboard_changed
+                dashboard_changed = _apply_status_payload(channels, packet.source, packet.channel_id, payload_dict) or dashboard_changed
                 payload = status_receiver.recv(timeout_ms=0)
 
             for name, process in processes:
@@ -361,6 +411,7 @@ def main(argv=None):
                         channels=channels,
                         num_lines_last_time=printed_lines,
                         mode_label="services-only" if args.services_only else "full-stack",
+                        show_debug_metrics=args.show_debug_metrics,
                     )
                     print(f"{name} service exited with status {return_code}", file=sys.stderr)
                     exit_code = return_code or 1
@@ -375,6 +426,7 @@ def main(argv=None):
                     channels=channels,
                     num_lines_last_time=printed_lines,
                     mode_label="services-only" if args.services_only else "full-stack",
+                    show_debug_metrics=args.show_debug_metrics,
                 )
             time.sleep(0.2)
     except KeyboardInterrupt:

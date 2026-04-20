@@ -3,9 +3,14 @@ import time
 import numpy as np
 from gnuradio import gr
 
+from core.pipeline.runtime_status import StatusPublisher
 from core.protocol.frame_layout import quantize_float_symbols
-from ipc.message_schema import FRAME_FLAG_SYNC_DETECTED, FramePacket
-from ipc.transport.uds_seqpacket import UdsSeqpacketServer, resolve_frame_socket_path
+from ipc.message_schema import FRAME_FLAG_SYNC_DETECTED, STATUS_SOURCE_RF, FramePacket
+from ipc.transport.uds_seqpacket import UdsSeqpacketServer, resolve_frame_socket_path, resolve_status_socket_path
+
+
+RF_DEBUG_REPORT_INTERVAL_SEC = 1.0
+RF_DEBUG_ACTIVE_WINDOW_SEC = 2.0
 
 
 class SyncWordCorrelator(gr.sync_block):
@@ -59,9 +64,22 @@ class SyncWordCorrelator(gr.sync_block):
 
         resolved_socket_path = resolve_frame_socket_path(channel_count=self.channel_count, socket_path=socket_path)
         self.transport = UdsSeqpacketServer(resolved_socket_path)
+        self.status_publisher = StatusPublisher(
+            socket_path=resolve_status_socket_path(channel_count=self.channel_count),
+            source=STATUS_SOURCE_RF,
+        )
+        self.next_debug_report_at = time.monotonic() + RF_DEBUG_REPORT_INTERVAL_SEC
+        self.sync_detect_count = [0] * self.channel_count
+        self.frame_send_ok = [0] * self.channel_count
+        self.frame_send_fail = [0] * self.channel_count
+        self.last_metric = [None] * self.channel_count
+        self.best_metric = [None] * self.channel_count
+        self.last_detect_metric = [None] * self.channel_count
+        self.last_detect_at = [0.0] * self.channel_count
 
     def stop(self):
         self.transport.close()
+        self.status_publisher.close()
         return True
 
     def _start_collection(self, channel_index, initial_window):
@@ -70,13 +88,84 @@ class SyncWordCorrelator(gr.sync_block):
         self.samples_collected[channel_index] = self.sync_word_length
         self.collecting[channel_index] = True
 
-    def _sync_detected(self, channel_index):
+    def _sync_metric(self, channel_index):
         if self.detection_mode == "correlation":
-            correlation = float(np.dot(self.shift_registers[channel_index], self.sync_word))
-            return correlation >= self.match_threshold
+            return float(np.dot(self.shift_registers[channel_index], self.sync_word))
 
-        squared_error = float(np.sum((self.shift_registers[channel_index] - self.sync_word) ** 2))
-        return squared_error <= self.match_threshold
+        return float(np.sum((self.shift_registers[channel_index] - self.sync_word) ** 2))
+
+    def _update_metric_stats(self, channel_index, metric):
+        self.last_metric[channel_index] = metric
+        best_metric = self.best_metric[channel_index]
+        if best_metric is None:
+            self.best_metric[channel_index] = metric
+            return
+
+        if self.detection_mode == "correlation":
+            if metric > best_metric:
+                self.best_metric[channel_index] = metric
+            return
+
+        if metric < best_metric:
+            self.best_metric[channel_index] = metric
+
+    def _sync_detected(self, channel_index, metric=None):
+        if metric is None:
+            metric = self._sync_metric(channel_index)
+
+        if self.detection_mode == "correlation":
+            return metric >= self.match_threshold
+
+        return metric <= self.match_threshold
+
+    def _format_metric(self, metric):
+        if metric is None:
+            return "n/a"
+        return f"{metric:.1f}"
+
+    def _channel_debug_summary(self, channel_index):
+        metric_name = "corr" if self.detection_mode == "correlation" else "sse"
+        return (
+            f"sync={self.sync_detect_count[channel_index]} ipc={self.frame_send_ok[channel_index]}/{self.frame_send_fail[channel_index]} "
+            f"{metric_name}={self._format_metric(self.last_detect_metric[channel_index])} "
+            f"thr={self.match_threshold:.1f} best={self._format_metric(self.best_metric[channel_index])}"
+        )
+
+    def _maybe_publish_debug_metrics(self):
+        current_time = time.monotonic()
+        if current_time < self.next_debug_report_at:
+            return
+
+        active_channels = sum(
+            1
+            for last_detect_at in self.last_detect_at
+            if last_detect_at and (current_time - last_detect_at) <= RF_DEBUG_ACTIVE_WINDOW_SEC
+        )
+        self.status_publisher.publish(
+            payload_dict={
+                "event": "service_metrics",
+                "summary": (
+                    f"sync={sum(self.sync_detect_count)} ipc={sum(self.frame_send_ok)}/{sum(self.frame_send_fail)} "
+                    f"mode={self.detection_mode} thr={self.match_threshold:.1f} active={active_channels}"
+                ),
+            }
+        )
+
+        for channel_index in range(self.channel_count):
+            if self.sync_detect_count[channel_index] <= 0 and self.frame_send_fail[channel_index] <= 0:
+                continue
+            if self.last_detect_at[channel_index] and (current_time - self.last_detect_at[channel_index]) > RF_DEBUG_ACTIVE_WINDOW_SEC:
+                if self.frame_send_fail[channel_index] <= 0:
+                    continue
+            self.status_publisher.publish(
+                channel_id=channel_index + 1,
+                payload_dict={
+                    "event": "channel_state",
+                    "rf_debug": self._channel_debug_summary(channel_index),
+                },
+            )
+
+        self.next_debug_report_at = current_time + RF_DEBUG_REPORT_INTERVAL_SEC
 
     def _append_symbol(self, channel_index, symbol):
         if not self.collecting[channel_index]:
@@ -98,7 +187,10 @@ class SyncWordCorrelator(gr.sync_block):
             symbols=quantize_float_symbols(self.packet_bufs[channel_index]),
         )
         self.sequence += 1
-        self.transport.send(packet.encode())
+        if self.transport.send(packet.encode()):
+            self.frame_send_ok[channel_index] += 1
+        else:
+            self.frame_send_fail[channel_index] += 1
 
         self.collecting[channel_index] = False
         self.packet_bufs[channel_index] = None
@@ -123,7 +215,14 @@ class SyncWordCorrelator(gr.sync_block):
 
                 self.shift_registers[channel_index][:-1] = self.shift_registers[channel_index][1:]
                 self.shift_registers[channel_index][-1] = symbol
-                if self._sync_detected(channel_index):
+                metric = self._sync_metric(channel_index)
+                self._update_metric_stats(channel_index, metric)
+                if self._sync_detected(channel_index, metric):
+                    self.sync_detect_count[channel_index] += 1
+                    self.last_detect_metric[channel_index] = metric
+                    self.last_detect_at[channel_index] = time.monotonic()
                     self._start_collection(channel_index, self.shift_registers[channel_index].copy())
+
+        self._maybe_publish_debug_metrics()
 
         return sample_count

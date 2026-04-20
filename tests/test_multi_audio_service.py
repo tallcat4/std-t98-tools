@@ -15,6 +15,7 @@ from std_t98_multi_audio_service import (
     _maybe_send_secret_request,
     _parse_audio_latency,
     _trim_audio_backlog,
+    _trim_audio_backlog_with_stats,
 )
 
 
@@ -99,3 +100,19 @@ def test_trim_audio_backlog_clears_large_queue_until_under_limit():
 
     assert remaining <= AUDIO_QUEUE_MAX_BYTES
     assert audio_queue[-1] == b"c" * 8
+
+
+def test_trim_audio_backlog_with_stats_reports_dropped_chunks_and_bytes():
+    audio_queue = deque([b"old", b"middle", b"new"])
+    queued_bytes = sum(len(chunk) for chunk in audio_queue)
+
+    remaining, dropped_bytes, dropped_chunks = _trim_audio_backlog_with_stats(
+        audio_queue,
+        queued_bytes,
+        len(b"middle") + len(b"new"),
+    )
+
+    assert remaining == len(b"middle") + len(b"new")
+    assert dropped_bytes == len(b"old")
+    assert dropped_chunks == 1
+    assert list(audio_queue) == [b"middle", b"new"]

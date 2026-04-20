@@ -10,6 +10,7 @@ class ProcessView:
     script_name: str
     pid: int | None = None
     state: str = "STARTING"
+    detail: str = ""
 
 
 @dataclass
@@ -21,6 +22,9 @@ class ChannelView:
     secret_status: str = "Idle"
     secret_key: int = 0
     secret_cache_keys: tuple[int, ...] = ()
+    rf_debug: str = ""
+    protocol_debug: str = ""
+    audio_debug: str = ""
     csm: str | None = None
     sacch: dict | None = None
     last_update: float = field(default_factory=time.time)
@@ -40,7 +44,7 @@ def _colorize_rx_state(state: str) -> str:
     return "\033[1;30m CLOSE \033[0m"
 
 
-def print_stack_dashboard(processes, channels, num_lines_last_time, mode_label="full-stack"):
+def print_stack_dashboard(processes, channels, num_lines_last_time, mode_label="full-stack", show_debug_metrics=False):
     if num_lines_last_time > 0:
         sys.stdout.write(f"\033[{num_lines_last_time}A")
 
@@ -58,6 +62,9 @@ def print_stack_dashboard(processes, channels, num_lines_last_time, mode_label="
             f"\033[K[{process_view.name:<8}] {state} pid={pid} via {process_view.python_executable}\n"
         )
         lines += 1
+        if show_debug_metrics and process_view.detail:
+            sys.stdout.write(f"\033[K  metrics: {process_view.detail}\n")
+            lines += 1
 
     sys.stdout.write("\033[K" + "-" * 70 + "\n")
     lines += 1
@@ -97,6 +104,16 @@ def print_stack_dashboard(processes, channels, num_lines_last_time, mode_label="
             sys.stdout.write(
                 f"\033[K  > Secret: key={channel.secret_key:05d} | {channel.secret_status}\n"
             )
+            if show_debug_metrics:
+                if channel.rf_debug:
+                    sys.stdout.write(f"\033[K  > RF    : {channel.rf_debug}\n")
+                    lines += 1
+                if channel.protocol_debug:
+                    sys.stdout.write(f"\033[K  > Proto : {channel.protocol_debug}\n")
+                    lines += 1
+                if channel.audio_debug:
+                    sys.stdout.write(f"\033[K  > Audio : {channel.audio_debug}\n")
+                    lines += 1
             sys.stdout.write("\033[K" + "-" * 70 + "\n")
             lines += 5
 

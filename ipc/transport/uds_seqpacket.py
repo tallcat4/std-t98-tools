@@ -17,6 +17,10 @@ def _is_temporary_send_error(exc: OSError) -> bool:
     return exc.errno in _TEMPORARY_SEND_ERRNOS
 
 
+def _is_temporary_recv_error(exc: OSError) -> bool:
+    return exc.errno in _TEMPORARY_SEND_ERRNOS
+
+
 def _validate_packet_send(sent: int, payload: bytes) -> int:
     if sent != len(payload):
         raise OSError(errno.EPIPE, "partial packet send")
@@ -165,6 +169,16 @@ class UdsSeqpacketClient:
 
     def recv(self, max_size=65536):
         return self.socket.recv(max_size)
+
+    def try_recv(self, max_size=65536):
+        try:
+            return self.socket.recv(max_size, getattr(socket, "MSG_DONTWAIT", 0))
+        except BlockingIOError:
+            return None
+        except OSError as exc:
+            if _is_temporary_recv_error(exc):
+                return None
+            raise
 
     def close(self):
         self.socket.close()

@@ -67,6 +67,8 @@ SECRET_RESULT_LABELS = {
     SECRET_RESULT_GLOBAL_CACHE: "Global Cache Hit",
     SECRET_RESULT_FULL_SEARCH: "Full Search Hit",
 }
+DEBUG_REPORT_INTERVAL_SEC = 1.0
+DEBUG_ACTIVE_WINDOW_SEC = 2.0
 
 
 def _parse_audio_latency(value):
@@ -114,6 +116,18 @@ class SecretChannelState:
     pending_request: bool = False
     last_request_burst_index: int = -SECRET_RECHECK_INTERVAL_BURSTS
     burst_window: deque[bytes] = field(default_factory=lambda: deque(maxlen=SECRET_MAX_WINDOW_BURSTS))
+
+
+@dataclass
+class AudioChannelDebug:
+    voice_packets: int = 0
+    pcm_chunks: int = 0
+    empty_decodes: int = 0
+    pending_bytes: int = 0
+    peak_pending_bytes: int = 0
+    trim_events: int = 0
+    trim_bytes: int = 0
+    last_packet_at: float = 0.0
 
 
 def _parse_args(argv=None):
@@ -235,9 +249,19 @@ def _open_audio_stream_with_retry(device, latency, headless):
 
 
 def _trim_audio_backlog(audio_queue, queued_bytes, max_bytes):
-    while audio_queue and queued_bytes > max_bytes:
-        queued_bytes -= len(audio_queue.popleft())
+    queued_bytes, _, _ = _trim_audio_backlog_with_stats(audio_queue, queued_bytes, max_bytes)
     return queued_bytes
+
+
+def _trim_audio_backlog_with_stats(audio_queue, queued_bytes, max_bytes):
+    dropped_bytes = 0
+    dropped_chunks = 0
+    while audio_queue and queued_bytes > max_bytes:
+        dropped = audio_queue.popleft()
+        queued_bytes -= len(dropped)
+        dropped_bytes += len(dropped)
+        dropped_chunks += 1
+    return queued_bytes, dropped_bytes, dropped_chunks
 
 
 def _mix_pcm_chunks(pcm_chunks, gain):
@@ -277,6 +301,15 @@ class AudioOutputWorker:
         self.pending_channels = {}
         self.buffer_started_at = None
         self.mix_primed = False
+        self.queue_trim_events = 0
+        self.queue_trim_bytes = 0
+        self.max_total_pending_bytes = 0
+        self.write_calls = 0
+        self.write_bytes = 0
+        self.underflow_count = 0
+        self.write_failures = 0
+        self.stream_open_count = 0
+        self.stream_reopen_count = 0
         self.condition = threading.Condition()
         self.thread = threading.Thread(target=self._run, name="std-t98-audio-output", daemon=True)
 
@@ -285,27 +318,37 @@ class AudioOutputWorker:
 
     def enqueue(self, channel_id, pcm_out):
         if not pcm_out:
-            return False
+            return None
 
         if len(pcm_out) > AUDIO_QUEUE_MAX_BYTES:
             pcm_out = pcm_out[-AUDIO_QUEUE_MAX_BYTES:]
 
         with self.condition:
             if self.closed:
-                return False
+                return None
             if not self._has_pending_audio_locked():
                 self.buffer_started_at = time.monotonic()
 
             channel_state = self.pending_channels.setdefault(channel_id, ChannelAudioState())
             channel_state.pending_pcm.append(pcm_out)
             channel_state.pending_bytes += len(pcm_out)
-            channel_state.pending_bytes = _trim_audio_backlog(
+            channel_state.pending_bytes, dropped_bytes, dropped_chunks = _trim_audio_backlog_with_stats(
                 channel_state.pending_pcm,
                 channel_state.pending_bytes,
                 AUDIO_QUEUE_MAX_BYTES,
             )
+            self.queue_trim_events += dropped_chunks
+            self.queue_trim_bytes += dropped_bytes
+            total_pending_bytes = self._total_pending_bytes_locked()
+            if total_pending_bytes > self.max_total_pending_bytes:
+                self.max_total_pending_bytes = total_pending_bytes
             self.condition.notify()
-        return True
+        return {
+            "pending_bytes": channel_state.pending_bytes,
+            "total_pending_bytes": total_pending_bytes,
+            "dropped_bytes": dropped_bytes,
+            "dropped_chunks": dropped_chunks,
+        }
 
     def close(self):
         with self.condition:
@@ -321,6 +364,21 @@ class AudioOutputWorker:
 
     def _total_pending_bytes_locked(self):
         return sum(channel_state.pending_bytes for channel_state in self.pending_channels.values())
+
+    def snapshot_metrics(self):
+        with self.condition:
+            return {
+                "pending_bytes": self._total_pending_bytes_locked(),
+                "active_channels": sum(1 for channel_state in self.pending_channels.values() if channel_state.pending_bytes > 0),
+                "max_pending_bytes": self.max_total_pending_bytes,
+                "queue_trim_events": self.queue_trim_events,
+                "queue_trim_bytes": self.queue_trim_bytes,
+                "write_calls": self.write_calls,
+                "write_bytes": self.write_bytes,
+                "underflows": self.underflow_count,
+                "write_failures": self.write_failures,
+                "stream_reopens": self.stream_reopen_count,
+            }
 
     def _pop_mixed_chunk_locked(self):
         pcm_chunks = []
@@ -383,19 +441,31 @@ class AudioOutputWorker:
 
             if self.audio_stream is None:
                 self.audio_stream = _open_audio_stream_with_retry(self.device, self.latency, self.headless)
+                with self.condition:
+                    if self.stream_open_count > 0:
+                        self.stream_reopen_count += 1
+                    self.stream_open_count += 1
 
             try:
                 underflowed = self.audio_stream.write(pcm_out)
             except sd.PortAudioError as exc:
                 if not self.headless:
                     print(f"Audio write failed: {exc}", file=sys.stderr)
+                with self.condition:
+                    self.write_failures += 1
                 _close_audio_stream(self.audio_stream)
                 self.audio_stream = None
                 output_underflow_count = 0
                 time.sleep(AUDIO_RECOVERY_DELAY_SEC)
                 continue
 
+            with self.condition:
+                self.write_calls += 1
+                self.write_bytes += len(pcm_out)
+
             if underflowed:
+                with self.condition:
+                    self.underflow_count += 1
                 output_underflow_count += 1
                 if output_underflow_count >= AUDIO_UNDERFLOW_RECOVERY_THRESHOLD:
                     if not self.headless:
@@ -409,6 +479,57 @@ class AudioOutputWorker:
 
         _close_audio_stream(self.audio_stream)
         self.audio_stream = None
+
+
+def _format_audio_channel_debug(debug_stats):
+    return (
+        f"rx={debug_stats.voice_packets} pcm={debug_stats.pcm_chunks} empty={debug_stats.empty_decodes} "
+        f"q={debug_stats.pending_bytes}B peak={debug_stats.peak_pending_bytes}B "
+        f"trim={debug_stats.trim_events}/{debug_stats.trim_bytes}B"
+    )
+
+
+def _format_audio_service_summary(audio_output, debug_by_channel, current_time):
+    output_metrics = audio_output.snapshot_metrics()
+    total_voice_packets = sum(debug_stats.voice_packets for debug_stats in debug_by_channel.values())
+    active_channels = sum(
+        1
+        for debug_stats in debug_by_channel.values()
+        if debug_stats.last_packet_at and (current_time - debug_stats.last_packet_at) <= DEBUG_ACTIVE_WINDOW_SEC
+    )
+    return (
+        f"rx={total_voice_packets} q={output_metrics['pending_bytes']}B peak={output_metrics['max_pending_bytes']}B "
+        f"trim={output_metrics['queue_trim_events']}/{output_metrics['queue_trim_bytes']}B "
+        f"write={output_metrics['write_calls']} under={output_metrics['underflows']} "
+        f"err={output_metrics['write_failures']} reopen={output_metrics['stream_reopens']} active={active_channels}"
+    )
+
+
+def _maybe_publish_audio_metrics(status_publisher, audio_output, debug_by_channel, next_report_at, current_time):
+    if current_time < next_report_at:
+        return next_report_at
+
+    status_publisher.publish(
+        payload_dict={
+            "event": "service_metrics",
+            "summary": _format_audio_service_summary(audio_output, debug_by_channel, current_time),
+        }
+    )
+
+    for channel_id, debug_stats in debug_by_channel.items():
+        if debug_stats.voice_packets <= 0:
+            continue
+        if (current_time - debug_stats.last_packet_at) > DEBUG_ACTIVE_WINDOW_SEC and debug_stats.pending_bytes <= 0:
+            continue
+        status_publisher.publish(
+            channel_id=channel_id,
+            payload_dict={
+                "event": "channel_state",
+                "audio_debug": _format_audio_channel_debug(debug_stats),
+            },
+        )
+
+    return current_time + DEBUG_REPORT_INTERVAL_SEC
 
 
 def main(argv=None):
@@ -425,10 +546,12 @@ def main(argv=None):
     key_sequences = {DECRYPTION_KEY: generate_pn_sequence_196(DECRYPTION_KEY)}
     decoders = {}
     secret_states = {}
+    audio_debug = {}
     last_playing_publish = {}
     secret_request_sequence = 0
     status_publisher = StatusPublisher(socket_path=args.status_socket, source=STATUS_SOURCE_AUDIO)
     audio_output = AudioOutputWorker(args.device, args.latency, args.headless, args.gain)
+    next_debug_report_at = time.time() + DEBUG_REPORT_INTERVAL_SEC
 
     if not args.headless:
         print(f"Audio service waiting for voice bursts on {voice_socket_path}")
@@ -455,116 +578,142 @@ def main(argv=None):
 
         while True:
             events = dict(poller.poll(100))
-            if not events:
-                continue
+            current_time = time.time()
 
             if secret_result_client.fileno() in events:
-                result_packet = SecretCrackResultPacket.decode(secret_result_client.recv())
-                secret_state = secret_states.get(result_packet.channel_id)
-                if secret_state is not None and secret_state.session_id == result_packet.session_id:
-                    secret_state.pending_request = False
-                    if result_packet.resolved_key > 0:
-                        secret_state.active_key = result_packet.resolved_key
-                    status_publisher.publish(
-                        channel_id=result_packet.channel_id,
-                        payload_dict={
-                            "event": "channel_state",
-                            "audio_status": "Playing",
-                            "secret_status": SECRET_RESULT_LABELS[result_packet.result_source],
-                            "secret_key": secret_state.active_key,
-                        },
+                while True:
+                    result_payload = secret_result_client.try_recv()
+                    if not result_payload:
+                        break
+
+                    result_packet = SecretCrackResultPacket.decode(result_payload)
+                    secret_state = secret_states.get(result_packet.channel_id)
+                    if secret_state is not None and secret_state.session_id == result_packet.session_id:
+                        secret_state.pending_request = False
+                        if result_packet.resolved_key > 0:
+                            secret_state.active_key = result_packet.resolved_key
+                        status_publisher.publish(
+                            channel_id=result_packet.channel_id,
+                            payload_dict={
+                                "event": "channel_state",
+                                "audio_status": "Playing",
+                                "secret_status": SECRET_RESULT_LABELS[result_packet.result_source],
+                                "secret_key": secret_state.active_key,
+                            },
+                        )
+
+            if voice_client.fileno() in events:
+                while True:
+                    voice_payload = voice_client.try_recv()
+                    if not voice_payload:
+                        break
+
+                    packet = VoiceBurstPacket.decode(voice_payload)
+                    debug_stats = audio_debug.setdefault(packet.channel_id, AudioChannelDebug())
+                    debug_stats.voice_packets += 1
+                    debug_stats.last_packet_at = current_time
+                    secret_state = secret_states.setdefault(packet.channel_id, SecretChannelState(active_key=DECRYPTION_KEY))
+
+                    if packet.channel_id not in decoders:
+                        decoders[packet.channel_id] = create_decoder()
+                        if not args.headless:
+                            print(f"Opened audio decoder for channel {packet.channel_id:02d}")
+                        status_publisher.publish(
+                            channel_id=packet.channel_id,
+                            payload_dict={
+                                "event": "channel_state",
+                                "audio_status": "Decoder Ready",
+                            },
+                        )
+
+                    decoder = decoders[packet.channel_id]
+                    if packet.payload_format == VOICE_FORMAT_RAW_3600:
+                        payloads_3600 = _split_payload_blocks(packet.payload, VOICE_BURST_BLOCK_BYTES_RAW_3600)
+                        payloads_2450 = payloads_3600_to_2450(payloads_3600)
+                    else:
+                        payloads_2450 = _split_payload_blocks(packet.payload, VOICE_BURST_BLOCK_BYTES_AMBE_2450)
+
+                    if packet.call_stat == CALL_STAT_SECRET:
+                        if not secret_state.secret_active:
+                            _start_secret_session(secret_state)
+                            status_publisher.publish(
+                                channel_id=packet.channel_id,
+                                payload_dict={
+                                    "event": "channel_state",
+                                    "audio_status": "Playing",
+                                    "secret_status": "Collecting",
+                                    "secret_key": secret_state.active_key,
+                                },
+                            )
+
+                        secret_state.burst_window.append(_secret_burst_payload(payloads_2450))
+                        secret_request_sequence, request_sent = _maybe_send_secret_request(
+                            packet,
+                            secret_state,
+                            secret_request_client,
+                            secret_request_sequence,
+                        )
+                        if request_sent:
+                            status_publisher.publish(
+                                channel_id=packet.channel_id,
+                                payload_dict={
+                                    "event": "channel_state",
+                                    "audio_status": "Playing",
+                                    "secret_status": "Search Pending",
+                                    "secret_key": secret_state.active_key,
+                                },
+                            )
+                    elif secret_state.secret_active:
+                        _stop_secret_session(secret_state)
+                        status_publisher.publish(
+                            channel_id=packet.channel_id,
+                            payload_dict={
+                                "event": "channel_state",
+                                "audio_status": "Playing",
+                                "secret_status": "Idle",
+                                "secret_key": secret_state.active_key,
+                            },
+                        )
+
+                    decryption_key = secret_state.active_key if packet.call_stat == CALL_STAT_SECRET else DECRYPTION_KEY
+                    descrambled_payloads = descramble_burst(payloads_2450, _ensure_key_sequence(key_sequences, decryption_key))
+                    pcm_out = decode_2450_payloads_to_pcm(
+                        descrambled_payloads,
+                        decoder,
+                        upsample_factor=UPSAMPLE_FACTOR,
                     )
+                    if not pcm_out:
+                        debug_stats.empty_decodes += 1
+                        continue
 
-            if voice_client.fileno() not in events:
-                continue
+                    enqueue_result = audio_output.enqueue(packet.channel_id, pcm_out)
+                    if enqueue_result is None:
+                        continue
+                    debug_stats.pcm_chunks += 1
+                    debug_stats.pending_bytes = enqueue_result["pending_bytes"]
+                    if debug_stats.pending_bytes > debug_stats.peak_pending_bytes:
+                        debug_stats.peak_pending_bytes = debug_stats.pending_bytes
+                    debug_stats.trim_events += enqueue_result["dropped_chunks"]
+                    debug_stats.trim_bytes += enqueue_result["dropped_bytes"]
 
-            packet = VoiceBurstPacket.decode(voice_client.recv())
-            secret_state = secret_states.setdefault(packet.channel_id, SecretChannelState(active_key=DECRYPTION_KEY))
+                    last_publish_time = last_playing_publish.get(packet.channel_id, 0.0)
+                    if current_time - last_publish_time >= 1.0:
+                        status_publisher.publish(
+                            channel_id=packet.channel_id,
+                            payload_dict={
+                                "event": "channel_state",
+                                "audio_status": "Playing",
+                            },
+                        )
+                        last_playing_publish[packet.channel_id] = current_time
 
-            if packet.channel_id not in decoders:
-                decoders[packet.channel_id] = create_decoder()
-                if not args.headless:
-                    print(f"Opened audio decoder for channel {packet.channel_id:02d}")
-                status_publisher.publish(
-                    channel_id=packet.channel_id,
-                    payload_dict={
-                        "event": "channel_state",
-                        "audio_status": "Decoder Ready",
-                    },
-                )
-
-            decoder = decoders[packet.channel_id]
-            if packet.payload_format == VOICE_FORMAT_RAW_3600:
-                payloads_3600 = _split_payload_blocks(packet.payload, VOICE_BURST_BLOCK_BYTES_RAW_3600)
-                payloads_2450 = payloads_3600_to_2450(payloads_3600)
-            else:
-                payloads_2450 = _split_payload_blocks(packet.payload, VOICE_BURST_BLOCK_BYTES_AMBE_2450)
-
-            if packet.call_stat == CALL_STAT_SECRET:
-                if not secret_state.secret_active:
-                    _start_secret_session(secret_state)
-                    status_publisher.publish(
-                        channel_id=packet.channel_id,
-                        payload_dict={
-                            "event": "channel_state",
-                            "audio_status": "Playing",
-                            "secret_status": "Collecting",
-                            "secret_key": secret_state.active_key,
-                        },
-                    )
-
-                secret_state.burst_window.append(_secret_burst_payload(payloads_2450))
-                secret_request_sequence, request_sent = _maybe_send_secret_request(
-                    packet,
-                    secret_state,
-                    secret_request_client,
-                    secret_request_sequence,
-                )
-                if request_sent:
-                    status_publisher.publish(
-                        channel_id=packet.channel_id,
-                        payload_dict={
-                            "event": "channel_state",
-                            "audio_status": "Playing",
-                            "secret_status": "Search Pending",
-                            "secret_key": secret_state.active_key,
-                        },
-                    )
-            elif secret_state.secret_active:
-                _stop_secret_session(secret_state)
-                status_publisher.publish(
-                    channel_id=packet.channel_id,
-                    payload_dict={
-                        "event": "channel_state",
-                        "audio_status": "Playing",
-                        "secret_status": "Idle",
-                        "secret_key": secret_state.active_key,
-                    },
-                )
-
-            decryption_key = secret_state.active_key if packet.call_stat == CALL_STAT_SECRET else DECRYPTION_KEY
-            descrambled_payloads = descramble_burst(payloads_2450, _ensure_key_sequence(key_sequences, decryption_key))
-            pcm_out = decode_2450_payloads_to_pcm(
-                descrambled_payloads,
-                decoder,
-                upsample_factor=UPSAMPLE_FACTOR,
+            next_debug_report_at = _maybe_publish_audio_metrics(
+                status_publisher,
+                audio_output,
+                audio_debug,
+                next_debug_report_at,
+                current_time,
             )
-            if not pcm_out:
-                continue
-
-            audio_output.enqueue(packet.channel_id, pcm_out)
-
-            current_time = time.time()
-            last_publish_time = last_playing_publish.get(packet.channel_id, 0.0)
-            if current_time - last_publish_time >= 1.0:
-                status_publisher.publish(
-                    channel_id=packet.channel_id,
-                    payload_dict={
-                        "event": "channel_state",
-                        "audio_status": "Playing",
-                    },
-                )
-                last_playing_publish[packet.channel_id] = current_time
 
     except KeyboardInterrupt:
         if not args.headless:

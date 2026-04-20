@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import argparse
+from dataclasses import dataclass
 import select
 import sys
 import time
@@ -26,6 +27,21 @@ from ipc.transport.uds_seqpacket import (
 CHANNEL_COUNT = 30
 CHANNEL_CLOSE_TIMEOUT = 0.5
 VOICE_KEY_ID = 0
+DEBUG_REPORT_INTERVAL_SEC = 1.0
+DEBUG_ACTIVE_WINDOW_SEC = 2.0
+
+
+@dataclass
+class ProtocolDebugStats:
+    frames_received: int = 0
+    rich_decode_failures: int = 0
+    sync_bursts: int = 0
+    traffic_bursts: int = 0
+    voice_sent: int = 0
+    voice_send_blocked: int = 0
+    sacch_crc_ok: int = 0
+    sacch_crc_fail: int = 0
+    last_frame_at: float = 0.0
 
 
 def _parse_args(argv=None):
@@ -50,6 +66,64 @@ def _publish_channel_state(status_publisher, channel_id, channel_context):
     )
 
 
+def _format_protocol_debug(debug_stats):
+    return (
+        f"frm={debug_stats.frames_received} sync={debug_stats.sync_bursts} "
+        f"traf={debug_stats.traffic_bursts} ipc={debug_stats.voice_sent}/{debug_stats.voice_send_blocked} "
+        f"rich_fail={debug_stats.rich_decode_failures} sacch={debug_stats.sacch_crc_ok}/{debug_stats.sacch_crc_fail}"
+    )
+
+
+def _format_protocol_service_summary(debug_by_channel, current_time):
+    totals = ProtocolDebugStats()
+    active_channels = 0
+
+    for debug_stats in debug_by_channel.values():
+        totals.frames_received += debug_stats.frames_received
+        totals.rich_decode_failures += debug_stats.rich_decode_failures
+        totals.sync_bursts += debug_stats.sync_bursts
+        totals.traffic_bursts += debug_stats.traffic_bursts
+        totals.voice_sent += debug_stats.voice_sent
+        totals.voice_send_blocked += debug_stats.voice_send_blocked
+        totals.sacch_crc_ok += debug_stats.sacch_crc_ok
+        totals.sacch_crc_fail += debug_stats.sacch_crc_fail
+        if debug_stats.last_frame_at and (current_time - debug_stats.last_frame_at) <= DEBUG_ACTIVE_WINDOW_SEC:
+            active_channels += 1
+
+    return (
+        f"frames={totals.frames_received} sync={totals.sync_bursts} traffic={totals.traffic_bursts} "
+        f"ipc={totals.voice_sent}/{totals.voice_send_blocked} rich_fail={totals.rich_decode_failures} "
+        f"sacch={totals.sacch_crc_ok}/{totals.sacch_crc_fail} active={active_channels}"
+    )
+
+
+def _maybe_publish_protocol_metrics(status_publisher, debug_by_channel, next_report_at, current_time):
+    if current_time < next_report_at:
+        return next_report_at
+
+    status_publisher.publish(
+        payload_dict={
+            "event": "service_metrics",
+            "summary": _format_protocol_service_summary(debug_by_channel, current_time),
+        }
+    )
+
+    for channel_id, debug_stats in debug_by_channel.items():
+        if debug_stats.frames_received <= 0:
+            continue
+        if (current_time - debug_stats.last_frame_at) > DEBUG_ACTIVE_WINDOW_SEC and debug_stats.voice_send_blocked <= 0:
+            continue
+        status_publisher.publish(
+            channel_id=channel_id,
+            payload_dict={
+                "event": "channel_state",
+                "protocol_debug": _format_protocol_debug(debug_stats),
+            },
+        )
+
+    return current_time + DEBUG_REPORT_INTERVAL_SEC
+
+
 def main(argv=None):
     args = _parse_args(argv)
     frame_socket_path = resolve_frame_socket_path(channel_count=CHANNEL_COUNT)
@@ -62,7 +136,9 @@ def main(argv=None):
     poller.register(frame_client.fileno(), select.POLLIN)
 
     channels = {}
+    debug_by_channel = {}
     voice_burst_index = 0
+    next_debug_report_at = time.time() + DEBUG_REPORT_INTERVAL_SEC
 
     if not args.headless:
         print(f"Protocol service listening to frames on {frame_socket_path}")
@@ -87,71 +163,94 @@ def main(argv=None):
             current_time = time.time()
             dashboard_changed = False
 
-            if events:
-                packet = FramePacket.decode(frame_client.recv())
-                channel_id = packet.channel_id
+            if frame_client.fileno() in events:
+                while True:
+                    payload = frame_client.try_recv()
+                    if not payload:
+                        break
 
-                if channel_id not in channels:
-                    channels[channel_id] = ChannelContext()
-                    dashboard_changed = True
+                    packet = FramePacket.decode(payload)
+                    channel_id = packet.channel_id
+                    channel_changed = False
 
-                ctx_ch = channels[channel_id]
-                if ctx_ch.rx_status != "OPEN":
-                    ctx_ch.rx_status = "OPEN"
-                    dashboard_changed = True
+                    if channel_id not in channels:
+                        channels[channel_id] = ChannelContext()
+                        channel_changed = True
 
-                ctx_ch.last_update = current_time
+                    ctx_ch = channels[channel_id]
+                    debug_stats = debug_by_channel.setdefault(channel_id, ProtocolDebugStats())
+                    debug_stats.frames_received += 1
+                    debug_stats.last_frame_at = current_time
 
-                fields = parse_frame_symbols(dewhiten(packet.symbols))
+                    if ctx_ch.rx_status != "OPEN":
+                        ctx_ch.rx_status = "OPEN"
+                        channel_changed = True
 
-                try:
-                    rich_data = decode_rich(fields["RICH"])
-                except Exception:
-                    continue
+                    ctx_ch.last_update = current_time
 
-                if rich_data["F"] == 0:
-                    pich_data = decode_pich(fields["TCH1"])
-                    if pich_data.get("CRC_OK") and ctx_ch.csm != pich_data.get("CSM"):
-                        ctx_ch.csm = pich_data.get("CSM")
-                        dashboard_changed = True
+                    fields = parse_frame_symbols(dewhiten(packet.symbols))
 
-                    if ctx_ch.audio_status != "Sync Burst":
-                        ctx_ch.audio_status = "Sync Burst"
-                        dashboard_changed = True
-                    continue
+                    try:
+                        rich_data = decode_rich(fields["RICH"])
+                    except Exception:
+                        debug_stats.rich_decode_failures += 1
+                        continue
 
-                if rich_data["F"] != 1:
-                    continue
+                    if rich_data["F"] == 0:
+                        debug_stats.sync_bursts += 1
+                        pich_data = decode_pich(fields["TCH1"])
+                        if pich_data.get("CRC_OK") and ctx_ch.csm != pich_data.get("CSM"):
+                            ctx_ch.csm = pich_data.get("CSM")
+                            channel_changed = True
 
-                sacch_data = decode_sacch(fields["SACCH"])
-                if sacch_data.get("CRC_OK") and ctx_ch.sacch != sacch_data:
-                    ctx_ch.sacch = sacch_data
-                    dashboard_changed = True
+                        if ctx_ch.audio_status != "Sync Burst":
+                            ctx_ch.audio_status = "Sync Burst"
+                            channel_changed = True
 
-                blocks_payload = b"".join(block_strings_to_payloads_3600(split_traffic_blocks(fields)))
-                voice_packet = VoiceBurstPacket(
-                    sequence=packet.sequence,
-                    channel_id=channel_id,
-                    call_stat=sacch_data.get("CallStat", 0) if sacch_data.get("CRC_OK") else 0,
-                    key_id=VOICE_KEY_ID,
-                    burst_index=voice_burst_index,
-                    payload_format=VOICE_FORMAT_RAW_3600,
-                    payload=blocks_payload,
-                )
-                voice_burst_index += 1
+                        dashboard_changed = dashboard_changed or channel_changed
+                        if channel_changed:
+                            _publish_channel_state(status_publisher, channel_id, ctx_ch)
+                        continue
 
-                if voice_server.send(voice_packet.encode()):
-                    next_audio_status = "Traffic->IPC"
-                else:
-                    next_audio_status = "Traffic (no client)"
+                    if rich_data["F"] != 1:
+                        continue
 
-                if ctx_ch.audio_status != next_audio_status:
-                    ctx_ch.audio_status = next_audio_status
-                    dashboard_changed = True
+                    debug_stats.traffic_bursts += 1
+                    sacch_data = decode_sacch(fields["SACCH"])
+                    if sacch_data.get("CRC_OK"):
+                        debug_stats.sacch_crc_ok += 1
+                        if ctx_ch.sacch != sacch_data:
+                            ctx_ch.sacch = sacch_data
+                            channel_changed = True
+                    else:
+                        debug_stats.sacch_crc_fail += 1
 
-                if dashboard_changed:
-                    _publish_channel_state(status_publisher, channel_id, ctx_ch)
+                    blocks_payload = b"".join(block_strings_to_payloads_3600(split_traffic_blocks(fields)))
+                    voice_packet = VoiceBurstPacket(
+                        sequence=packet.sequence,
+                        channel_id=channel_id,
+                        call_stat=sacch_data.get("CallStat", 0) if sacch_data.get("CRC_OK") else 0,
+                        key_id=VOICE_KEY_ID,
+                        burst_index=voice_burst_index,
+                        payload_format=VOICE_FORMAT_RAW_3600,
+                        payload=blocks_payload,
+                    )
+                    voice_burst_index += 1
 
+                    if voice_server.send(voice_packet.encode()):
+                        debug_stats.voice_sent += 1
+                        next_audio_status = "Traffic->IPC"
+                    else:
+                        debug_stats.voice_send_blocked += 1
+                        next_audio_status = "Traffic (no client)"
+
+                    if ctx_ch.audio_status != next_audio_status:
+                        ctx_ch.audio_status = next_audio_status
+                        channel_changed = True
+
+                    dashboard_changed = dashboard_changed or channel_changed
+                    if channel_changed:
+                        _publish_channel_state(status_publisher, channel_id, ctx_ch)
             else:
                 for channel_id, ctx_ch in channels.items():
                     if ctx_ch.rx_status == "OPEN" and (current_time - ctx_ch.last_update) > CHANNEL_CLOSE_TIMEOUT:
@@ -159,6 +258,13 @@ def main(argv=None):
                         ctx_ch.audio_status = "Idle"
                         dashboard_changed = True
                         _publish_channel_state(status_publisher, channel_id, ctx_ch)
+
+            next_debug_report_at = _maybe_publish_protocol_metrics(
+                status_publisher,
+                debug_by_channel,
+                next_debug_report_at,
+                current_time,
+            )
 
             if dashboard_changed and not args.headless:
                 printed_lines = print_dashboard(channels, printed_lines, title="STD-T98 Multi Protocol Service")

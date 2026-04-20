@@ -3,9 +3,11 @@ import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
+from core.pipeline.multi_stack_dashboard import ProcessView
 from std_t98_multi_service_launcher import (
     IMPORT_CHECK_TIMEOUT_SEC,
     ProcessSpec,
+    _apply_service_payload,
     _apply_status_payload,
     _python_supports_import_checks,
     _spawn_process,
@@ -206,6 +208,67 @@ def test_apply_status_payload_updates_secret_fields():
     assert channels[7].secret_status == "Global Cache Hit"
     assert channels[7].secret_key == 42
     assert channels[7].secret_cache_keys == (42, 77)
+
+
+def test_apply_status_payload_updates_debug_fields_from_protocol_audio_and_rf():
+    channels = {}
+
+    changed = _apply_status_payload(
+        channels,
+        source=1,
+        channel_id=3,
+        payload_dict={
+            "event": "channel_state",
+            "protocol_debug": "frm=12 sync=2 traf=10 ipc=10/0 rich_fail=0 sacch=10/0",
+        },
+    )
+
+    assert changed is True
+    assert channels[3].protocol_debug == "frm=12 sync=2 traf=10 ipc=10/0 rich_fail=0 sacch=10/0"
+
+    changed = _apply_status_payload(
+        channels,
+        source=2,
+        channel_id=3,
+        payload_dict={
+            "event": "channel_state",
+            "audio_debug": "rx=10 pcm=10 empty=0 q=960B peak=1920B trim=0/0B",
+        },
+    )
+
+    assert changed is True
+    assert channels[3].audio_debug == "rx=10 pcm=10 empty=0 q=960B peak=1920B trim=0/0B"
+
+    changed = _apply_status_payload(
+        channels,
+        source=5,
+        channel_id=3,
+        payload_dict={
+            "event": "channel_state",
+            "rf_debug": "sync=12 ipc=12/0 sse=1.8 thr=6.8 best=1.2",
+        },
+    )
+
+    assert changed is True
+    assert channels[3].rf_debug == "sync=12 ipc=12/0 sse=1.8 thr=6.8 best=1.2"
+
+
+def test_apply_service_payload_updates_process_detail():
+    process_views_by_name = {
+        "protocol": ProcessView(name="protocol", python_executable="/tmp/python", script_name="protocol.py"),
+    }
+
+    changed = _apply_service_payload(
+        process_views_by_name,
+        source=1,
+        payload_dict={
+            "event": "service_metrics",
+            "summary": "frames=120 sync=12 traffic=108 ipc=105/3 rich_fail=0 sacch=98/10 active=2",
+        },
+    )
+
+    assert changed is True
+    assert process_views_by_name["protocol"].detail == "frames=120 sync=12 traffic=108 ipc=105/3 rich_fail=0 sacch=98/10 active=2"
 
 
 def test_python_supports_import_checks_runs_each_statement_separately(monkeypatch):
