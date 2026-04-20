@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import argparse
+import contextlib
 import os
 import signal
 import shutil
@@ -11,9 +12,22 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from core.pipeline.multi_stack_dashboard import ChannelView, ProcessView, print_stack_dashboard
+from core.pipeline.multi_stack_dashboard import (
+    ChannelView,
+    ProcessView,
+    build_stack_dashboard_renderable,
+    print_stack_dashboard,
+    rich_dashboard_available,
+)
 from ipc.message_schema import STATUS_SOURCE_AUDIO, STATUS_SOURCE_PROTOCOL, STATUS_SOURCE_RF, STATUS_SOURCE_SECRET, StatusPacket
 from ipc.transport.uds_seqpacket import UdsSeqpacketReceiver, resolve_status_socket_path
+
+try:
+    from rich.console import Console
+    from rich.live import Live
+except ModuleNotFoundError:
+    Console = None
+    Live = None
 
 
 BACKEND_IMPORT_CHECKS = ("from gnuradio import gr", "from gnuradio import soapy")
@@ -296,6 +310,16 @@ def _apply_service_payload(process_views_by_name, source, payload_dict):
     return True
 
 
+def _should_use_rich_dashboard(args):
+    return (
+        Live is not None
+        and Console is not None
+        and rich_dashboard_available()
+        and sys.stdout.isatty()
+        and not args.passthrough_output
+    )
+
+
 def main(argv=None):
     args = _parse_args(argv)
     repo_root = Path(__file__).resolve().parent
@@ -351,6 +375,9 @@ def main(argv=None):
     exit_code = 0
     process_views = []
     channels = {}
+    use_rich_dashboard = _should_use_rich_dashboard(args)
+    process_exit_message = None
+    stopped_by_user = False
 
     for process_spec in process_specs:
         process_views.append(
@@ -361,80 +388,126 @@ def main(argv=None):
             )
         )
 
-    printed_lines = print_stack_dashboard(
-        processes=process_views,
-        channels=channels,
-        num_lines_last_time=0,
-        mode_label="services-only" if args.services_only else "full-stack",
-        show_debug_metrics=args.show_debug_metrics,
-    )
+    mode_label = "services-only" if args.services_only else "full-stack"
+    printed_lines = 0
+    live_dashboard = None
 
-    for process_spec, process_view in zip(process_specs, process_views):
-        process = _spawn_process(
-            process_spec,
-            passthrough_output=args.passthrough_output,
-            announce_start=False,
+    if use_rich_dashboard:
+        assert Live is not None
+        assert Console is not None
+        live_dashboard = Live(
+            build_stack_dashboard_renderable(
+                processes=process_views,
+                channels=channels,
+                mode_label=mode_label,
+                show_debug_metrics=args.show_debug_metrics,
+            ),
+            console=Console(),
+            refresh_per_second=4,
+            transient=False,
         )
-        processes.append((process_spec.name, process))
-        process_view.pid = process.pid
-        process_view.state = "RUNNING"
+    else:
+        printed_lines = print_stack_dashboard(
+            processes=process_views,
+            channels=channels,
+            num_lines_last_time=0,
+            mode_label=mode_label,
+            show_debug_metrics=args.show_debug_metrics,
+        )
 
-    printed_lines = print_stack_dashboard(
-        processes=process_views,
-        channels=channels,
-        num_lines_last_time=printed_lines,
-        mode_label="services-only" if args.services_only else "full-stack",
-        show_debug_metrics=args.show_debug_metrics,
-    )
+    with live_dashboard if live_dashboard is not None else contextlib.nullcontext() as live:
+        for process_spec, process_view in zip(process_specs, process_views):
+            process = _spawn_process(
+                process_spec,
+                passthrough_output=args.passthrough_output,
+                announce_start=False,
+            )
+            processes.append((process_spec.name, process))
+            process_view.pid = process.pid
+            process_view.state = "RUNNING"
 
-    process_views_by_name = {process_view.name: process_view for process_view in process_views}
+        if live is not None:
+            live.update(
+                build_stack_dashboard_renderable(
+                    processes=process_views,
+                    channels=channels,
+                    mode_label=mode_label,
+                    show_debug_metrics=args.show_debug_metrics,
+                ),
+                refresh=True,
+            )
+        else:
+            printed_lines = print_stack_dashboard(
+                processes=process_views,
+                channels=channels,
+                num_lines_last_time=printed_lines,
+                mode_label=mode_label,
+                show_debug_metrics=args.show_debug_metrics,
+            )
 
-    try:
-        while True:
-            dashboard_changed = False
+        process_views_by_name = {process_view.name: process_view for process_view in process_views}
 
-            payload = status_receiver.recv(timeout_ms=100)
-            while payload is not None:
-                packet = StatusPacket.decode(payload)
-                payload_dict = packet.to_dict()
-                dashboard_changed = _apply_service_payload(process_views_by_name, packet.source, payload_dict) or dashboard_changed
-                dashboard_changed = _apply_status_payload(channels, packet.source, packet.channel_id, payload_dict) or dashboard_changed
-                payload = status_receiver.recv(timeout_ms=0)
+        try:
+            while True:
+                dashboard_changed = False
 
-            for name, process in processes:
-                return_code = process.poll()
-                process_view = next(view for view in process_views if view.name == name)
-                if return_code is not None:
-                    process_view.state = "EXITED"
+                payload = status_receiver.recv(timeout_ms=100)
+                while payload is not None:
+                    packet = StatusPacket.decode(payload)
+                    payload_dict = packet.to_dict()
+                    dashboard_changed = _apply_service_payload(process_views_by_name, packet.source, payload_dict) or dashboard_changed
+                    dashboard_changed = _apply_status_payload(channels, packet.source, packet.channel_id, payload_dict) or dashboard_changed
+                    payload = status_receiver.recv(timeout_ms=0)
+
+                for name, process in processes:
+                    return_code = process.poll()
+                    process_view = next(view for view in process_views if view.name == name)
+                    if return_code is not None:
+                        process_view.state = "EXITED"
+                        exit_code = return_code or 1
+                        process_exit_message = f"{name} service exited with status {return_code}"
+                        dashboard_changed = True
+                        break
+                    if process_view.state != "RUNNING":
+                        process_view.state = "RUNNING"
+                        dashboard_changed = True
+
+                if live is not None:
+                    live.update(
+                        build_stack_dashboard_renderable(
+                            processes=process_views,
+                            channels=channels,
+                            mode_label=mode_label,
+                            show_debug_metrics=args.show_debug_metrics,
+                        ),
+                        refresh=True,
+                    )
+                elif dashboard_changed:
                     printed_lines = print_stack_dashboard(
                         processes=process_views,
                         channels=channels,
                         num_lines_last_time=printed_lines,
-                        mode_label="services-only" if args.services_only else "full-stack",
+                        mode_label=mode_label,
                         show_debug_metrics=args.show_debug_metrics,
                     )
-                    print(f"{name} service exited with status {return_code}", file=sys.stderr)
-                    exit_code = return_code or 1
-                    return exit_code
-                if process_view.state != "RUNNING":
-                    process_view.state = "RUNNING"
-                    dashboard_changed = True
 
-            if dashboard_changed:
-                printed_lines = print_stack_dashboard(
-                    processes=process_views,
-                    channels=channels,
-                    num_lines_last_time=printed_lines,
-                    mode_label="services-only" if args.services_only else "full-stack",
-                    show_debug_metrics=args.show_debug_metrics,
-                )
-            time.sleep(0.2)
-    except KeyboardInterrupt:
+                if process_exit_message is not None:
+                    break
+
+                time.sleep(0.2)
+        except KeyboardInterrupt:
+            stopped_by_user = True
+        finally:
+            status_receiver.close()
+            _terminate_processes([process for _, process in processes])
+
+    if stopped_by_user:
         print("\nStopping split multi-channel services...")
-        return exit_code
-    finally:
-        status_receiver.close()
-        _terminate_processes([process for _, process in processes])
+
+    if process_exit_message is not None:
+        print(process_exit_message, file=sys.stderr)
+
+    return exit_code
 
 
 if __name__ == "__main__":
