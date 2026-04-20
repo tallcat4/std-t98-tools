@@ -38,7 +38,7 @@ class test3(gr.top_block):
         self.freq_err_offset = freq_err_offset = -340
         
         self.sdr_tuner_gain = sdr_tuner_gain = 30
-        self.sdr_agc_enabled = sdr_agc_enabled = False
+        self.sdr_agc_enabled = sdr_agc_enabled = True
         self.sdr_biastee_enabled = sdr_biastee_enabled = False
         self.sdr_freq_corr = sdr_freq_corr = 0
 

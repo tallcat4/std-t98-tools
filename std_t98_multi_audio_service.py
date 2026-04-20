@@ -5,11 +5,14 @@ import argparse
 from collections import deque
 from dataclasses import dataclass, field
 import importlib
+import math
 import os
 import select
 import sys
 import threading
 import time
+
+import numpy as np
 
 from core.audio.ambe_adapter import create_decoder, decode_2450_payloads_to_pcm, payloads_3600_to_2450
 from core.crypto.pn_sequence import generate_pn_sequence_196
@@ -49,7 +52,10 @@ AUDIO_RECOVERY_DELAY_SEC = 0.5
 AUDIO_UNDERFLOW_RECOVERY_THRESHOLD = 8
 AUDIO_QUEUE_MAX_SECONDS = 0.5
 AUDIO_QUEUE_MAX_BYTES = int(SAMPLE_RATE * AUDIO_BYTES_PER_FRAME * AUDIO_QUEUE_MAX_SECONDS)
+AUDIO_MIX_PREFILL_SECONDS = 0.12
+AUDIO_MIX_PREFILL_BYTES = int(SAMPLE_RATE * AUDIO_BYTES_PER_FRAME * AUDIO_MIX_PREFILL_SECONDS)
 UPSAMPLE_FACTOR = 6
+DEFAULT_AUDIO_GAIN = 4.0
 CALL_STAT_SECRET = 1
 SECRET_MIN_WINDOW_BURSTS = 5
 SECRET_MAX_WINDOW_BURSTS = 10
@@ -81,6 +87,25 @@ def _parse_audio_latency(value):
         raise argparse.ArgumentTypeError(f"Invalid audio latency value: {value}") from exc
 
 
+def _parse_audio_gain(value):
+    if value is None:
+        return DEFAULT_AUDIO_GAIN
+
+    text = str(value).strip()
+    if not text:
+        return DEFAULT_AUDIO_GAIN
+
+    try:
+        gain = float(text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"Invalid audio gain value: {value}") from exc
+
+    if gain <= 0.0:
+        raise argparse.ArgumentTypeError(f"Audio gain must be greater than zero: {value}")
+
+    return gain
+
+
 @dataclass
 class SecretChannelState:
     session_id: int = 0
@@ -101,6 +126,12 @@ def _parse_args(argv=None):
         default=_parse_audio_latency(os.environ.get("STD_T98_AUDIO_LATENCY")),
         type=_parse_audio_latency,
         help="Optional sounddevice latency. Use 'high', 'low', or seconds. Default uses PortAudio's device default.",
+    )
+    parser.add_argument(
+        "--gain",
+        default=_parse_audio_gain(os.environ.get("STD_T98_AUDIO_GAIN")),
+        type=_parse_audio_gain,
+        help=f"Linear output gain applied after channel mixing. Default: {DEFAULT_AUDIO_GAIN}.",
     )
     return parser.parse_args(argv)
 
@@ -209,22 +240,50 @@ def _trim_audio_backlog(audio_queue, queued_bytes, max_bytes):
     return queued_bytes
 
 
+def _mix_pcm_chunks(pcm_chunks, gain):
+    valid_chunks = [chunk[: len(chunk) - (len(chunk) % AUDIO_BYTES_PER_FRAME)] for chunk in pcm_chunks if chunk]
+    if not valid_chunks:
+        return b""
+
+    mixed_length = max(len(chunk) for chunk in valid_chunks) // AUDIO_BYTES_PER_FRAME
+    mixed = np.zeros(mixed_length, dtype=np.float32)
+
+    for chunk in valid_chunks:
+        samples = np.frombuffer(chunk, dtype=np.int16).astype(np.float32)
+        mixed[: samples.size] += samples
+
+    if len(valid_chunks) > 1:
+        mixed /= math.sqrt(len(valid_chunks))
+
+    mixed *= gain
+    np.clip(mixed, np.iinfo(np.int16).min, np.iinfo(np.int16).max, out=mixed)
+    return mixed.astype(np.int16).tobytes()
+
+
+@dataclass
+class ChannelAudioState:
+    pending_pcm: deque[bytes] = field(default_factory=deque)
+    pending_bytes: int = 0
+
+
 class AudioOutputWorker:
-    def __init__(self, device, latency, headless):
+    def __init__(self, device, latency, headless, gain):
         self.device = device
         self.latency = latency
         self.headless = headless
+        self.gain = gain
         self.audio_stream = None
         self.closed = False
-        self.pending_pcm = deque()
-        self.pending_bytes = 0
+        self.pending_channels = {}
+        self.buffer_started_at = None
+        self.mix_primed = False
         self.condition = threading.Condition()
         self.thread = threading.Thread(target=self._run, name="std-t98-audio-output", daemon=True)
 
     def start(self):
         self.thread.start()
 
-    def enqueue(self, pcm_out):
+    def enqueue(self, channel_id, pcm_out):
         if not pcm_out:
             return False
 
@@ -234,9 +293,17 @@ class AudioOutputWorker:
         with self.condition:
             if self.closed:
                 return False
-            self.pending_pcm.append(pcm_out)
-            self.pending_bytes += len(pcm_out)
-            self.pending_bytes = _trim_audio_backlog(self.pending_pcm, self.pending_bytes, AUDIO_QUEUE_MAX_BYTES)
+            if not self._has_pending_audio_locked():
+                self.buffer_started_at = time.monotonic()
+
+            channel_state = self.pending_channels.setdefault(channel_id, ChannelAudioState())
+            channel_state.pending_pcm.append(pcm_out)
+            channel_state.pending_bytes += len(pcm_out)
+            channel_state.pending_bytes = _trim_audio_backlog(
+                channel_state.pending_pcm,
+                channel_state.pending_bytes,
+                AUDIO_QUEUE_MAX_BYTES,
+            )
             self.condition.notify()
         return True
 
@@ -249,17 +316,60 @@ class AudioOutputWorker:
         _close_audio_stream(self.audio_stream)
         self.audio_stream = None
 
+    def _has_pending_audio_locked(self):
+        return any(channel_state.pending_bytes > 0 for channel_state in self.pending_channels.values())
+
+    def _total_pending_bytes_locked(self):
+        return sum(channel_state.pending_bytes for channel_state in self.pending_channels.values())
+
+    def _pop_mixed_chunk_locked(self):
+        pcm_chunks = []
+        empty_channel_ids = []
+
+        for channel_id, channel_state in self.pending_channels.items():
+            if channel_state.pending_bytes <= 0:
+                empty_channel_ids.append(channel_id)
+                continue
+
+            pcm_chunk = channel_state.pending_pcm.popleft()
+            channel_state.pending_bytes -= len(pcm_chunk)
+            if channel_state.pending_bytes <= 0:
+                empty_channel_ids.append(channel_id)
+            pcm_chunks.append(pcm_chunk)
+
+        for channel_id in empty_channel_ids:
+            if self.pending_channels[channel_id].pending_bytes <= 0:
+                self.pending_channels.pop(channel_id, None)
+
+        if not self._has_pending_audio_locked():
+            self.mix_primed = False
+            self.buffer_started_at = None
+
+        return _mix_pcm_chunks(pcm_chunks, self.gain)
+
     def _next_chunk(self):
         with self.condition:
-            while not self.pending_pcm and not self.closed:
+            while True:
+                if self._has_pending_audio_locked():
+                    if not self.mix_primed:
+                        if self.buffer_started_at is None:
+                            self.buffer_started_at = time.monotonic()
+
+                        buffered_enough = self._total_pending_bytes_locked() >= AUDIO_MIX_PREFILL_BYTES
+                        buffered_long_enough = (time.monotonic() - self.buffer_started_at) >= AUDIO_MIX_PREFILL_SECONDS
+                        if not buffered_enough and not buffered_long_enough:
+                            self.condition.wait(timeout=0.02)
+                            continue
+
+                        self.mix_primed = True
+
+                    return self._pop_mixed_chunk_locked()
+
+                self.mix_primed = False
+                self.buffer_started_at = None
+                if self.closed:
+                    return None
                 self.condition.wait(timeout=0.1)
-
-            if not self.pending_pcm:
-                return None
-
-            pcm_out = self.pending_pcm.popleft()
-            self.pending_bytes -= len(pcm_out)
-            return pcm_out
 
     def _run(self):
         output_underflow_count = 0
@@ -318,13 +428,14 @@ def main(argv=None):
     last_playing_publish = {}
     secret_request_sequence = 0
     status_publisher = StatusPublisher(socket_path=args.status_socket, source=STATUS_SOURCE_AUDIO)
-    audio_output = AudioOutputWorker(args.device, args.latency, args.headless)
+    audio_output = AudioOutputWorker(args.device, args.latency, args.headless, args.gain)
 
     if not args.headless:
         print(f"Audio service waiting for voice bursts on {voice_socket_path}")
         print(f"Decryption Key (LFSR Init) set to: {DECRYPTION_KEY}")
         print(f"Secret request socket: {secret_request_socket_path}")
         print(f"Secret result socket: {secret_result_socket_path}")
+        print(f"Audio output gain: {args.gain}x")
 
     status_publisher.publish(
         payload_dict={
@@ -335,6 +446,7 @@ def main(argv=None):
             "secret_result_socket": secret_result_socket_path,
             "device": args.device,
             "latency": args.latency if args.latency is not None else "default",
+            "gain": args.gain,
         }
     )
 
@@ -440,7 +552,7 @@ def main(argv=None):
             if not pcm_out:
                 continue
 
-            audio_output.enqueue(pcm_out)
+            audio_output.enqueue(packet.channel_id, pcm_out)
 
             current_time = time.time()
             last_publish_time = last_playing_publish.get(packet.channel_id, 0.0)

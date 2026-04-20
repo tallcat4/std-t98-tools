@@ -1,12 +1,17 @@
 from collections import deque
 from types import SimpleNamespace
 
+import pytest
+
 from ipc.message_schema import SECRET_BURST_BYTES_AMBE_2450
 from std_t98_multi_audio_service import (
     AUDIO_QUEUE_MAX_BYTES,
+    DEFAULT_AUDIO_GAIN,
     SECRET_MIN_WINDOW_BURSTS,
     SECRET_RECHECK_INTERVAL_BURSTS,
     SecretChannelState,
+    _mix_pcm_chunks,
+    _parse_audio_gain,
     _maybe_send_secret_request,
     _parse_audio_latency,
     _trim_audio_backlog,
@@ -47,6 +52,33 @@ def test_parse_audio_latency_accepts_named_and_numeric_values():
     assert _parse_audio_latency("high") == "high"
     assert _parse_audio_latency("LOW") == "low"
     assert _parse_audio_latency("0.25") == 0.25
+
+
+def test_parse_audio_gain_accepts_numeric_values_and_defaults():
+    assert _parse_audio_gain(None) == DEFAULT_AUDIO_GAIN
+    assert _parse_audio_gain("") == DEFAULT_AUDIO_GAIN
+    assert _parse_audio_gain("2.5") == 2.5
+
+    with pytest.raises(Exception):
+        _parse_audio_gain("0")
+
+
+def test_mix_pcm_chunks_combines_multiple_channels_with_headroom():
+    mixed = _mix_pcm_chunks(
+        [
+            bytes.fromhex("e80318fc"),
+            bytes.fromhex("e80318fc"),
+        ],
+        gain=1.0,
+    )
+
+    assert mixed == bytes.fromhex("86057afa")
+
+
+def test_mix_pcm_chunks_applies_gain_and_clips():
+    mixed = _mix_pcm_chunks([bytes.fromhex("3075d08a")], gain=2.0)
+
+    assert mixed == bytes.fromhex("ff7f0080")
 
 
 def test_trim_audio_backlog_keeps_newest_audio_within_limit():
