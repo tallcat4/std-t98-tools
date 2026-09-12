@@ -13,6 +13,12 @@
 # SoapySDR driver key. Examples: "rtlsdr", "uhd" (USRP), "hackrf", "airspy".
 driver = "rtlsdr"
 
+# Extra SoapySDR device selection, appended to the device string as
+# "driver=<driver>,<device_args>". Use it to pick one of several identical
+# SDRs ("serial=00000001") or to tell a driver what it is talking to
+# ("type=b200"). Run `SoapySDRUtil --find` to see what is connected.
+device_args = ""
+
 # Input sample rate in Hz. The channelizer rates are derived from this, so any
 # rate that keeps a 6.25 kHz PFB bin achievable will work (e.g. USRP 2_000_000).
 sample_rate = 1_200_000
@@ -41,11 +47,30 @@ agc = true
 bias_tee = false
 
 # SoapySDR gain element name to drive in manual mode. "TUNER" suits RTL-SDR;
-# leave empty ("") to set the device's overall gain (works for e.g. USRP).
+# leave empty ("") to set the device's overall gain. On a USRP B210 the element
+# is named "PGA" (0-76 dB); "" works there too.
 gain_element = "TUNER"
 
-# Extra SoapySDR stream arguments.
-stream_args = "bufflen=16384"
+# RX antenna port. Commented out on purpose: when unset, the driver's own
+# default is kept, which is correct for single-input devices like RTL-SDR.
+# Devices with several RX ports need this -- a USRP B210 offers "TX/RX" and
+# "RX2" and defaults to RX2. Starting the backend with a name the device does
+# not have fails immediately and lists the valid ones.
+#antenna = "RX2"
+
+# Analog front-end bandwidth in Hz. Commented out on purpose: when unset, every
+# driver except RTL-SDR (which tracks its own filter to the sample rate) gets
+# the bandwidth set to sample_rate. Without that a USRP B210 stays at its full
+# 56 MHz and folds megahertz of spectrum onto the 187.5 kHz that matters. Set a
+# value to override, or 0 to leave the device's own setting alone.
+#bandwidth = 2_000_000
+
+# Extra SoapySDR stream arguments. Commented out on purpose: when unset, each
+# driver gets its own default ("bufflen=16384" for rtlsdr, none for everything
+# else). SoapySDR rejects stream args a device does not advertise and refuses
+# to open, so "bufflen" must not be sent to e.g. uhd or hackrf. Set this only
+# to tune a driver you know accepts the argument, or to "" to send none.
+#stream_args = "bufflen=16384"
 
 [channelizer]
 # 6.25 kHz STD-T98 channel raster. This is a protocol constant; changing it

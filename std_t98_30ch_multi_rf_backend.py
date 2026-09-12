@@ -125,7 +125,7 @@ class test3(gr.top_block):
         ##################################################
         self.soapy_source_0 = None
         dev = sdr_cfg.device_string()
-        stream_args = sdr_cfg.stream_args
+        stream_args = sdr_cfg.resolved_stream_args()
         tune_args = ['']
         settings = ['']
         gain_element = sdr_cfg.gain_element
@@ -171,7 +171,42 @@ class test3(gr.top_block):
         except Exception:
             self._soapy_source_0_has_agc = True
 
-        self.soapy_source_0.set_sample_rate(0, rf_samp_rate)
+        # Only touch the antenna when asked: single-input devices have nothing
+        # to select, and the driver's own default is right for most others.
+        antenna = sdr_cfg.antenna
+        if antenna:
+            try:
+                available = list(self.soapy_source_0.list_antennas(0))
+            except Exception:
+                available = []
+            if available and antenna not in available:
+                raise ValueError(
+                    f"Antenna {antenna!r} is not available on this device. "
+                    f"Choose one of: {available}"
+                )
+            self.soapy_source_0.set_antenna(0, antenna)
+
+        device_samp_rate = self._resolve_sample_rate(rf_samp_rate, config)
+        self.soapy_source_0.set_sample_rate(0, device_samp_rate)
+        # Some drivers round instead of refusing. The channelizer geometry is
+        # derived from the requested rate, so a silent substitution would
+        # mistune every channel.
+        actual_samp_rate = self.soapy_source_0.get_sample_rate(0)
+        if abs(actual_samp_rate - rf_samp_rate) > max(1.0, rf_samp_rate * 1e-6):
+            raise ValueError(
+                f"Device serves {actual_samp_rate:.0f} Hz, not the requested "
+                f"{rf_samp_rate:.0f} Hz. Re-run with --sample-rate "
+                f"{actual_samp_rate:.0f} so the channelizer matches, or pick a "
+                "rate the device supports exactly."
+            )
+
+        bandwidth = sdr_cfg.resolved_bandwidth()
+        if bandwidth:
+            try:
+                self.soapy_source_0.set_bandwidth(0, bandwidth)
+            except Exception:
+                # Not every device exposes a tunable analog filter.
+                pass
         self.soapy_source_0.set_frequency(0, (rf_freq + freq_offset + freq_err_offset))
         if sdr_freq_corr:
             try:
@@ -283,6 +318,47 @@ class test3(gr.top_block):
             self.null_sinks.append(ns)
             self.connect((self.pfb_channelizer_ccf_0, ch), (ns, 0))
 
+    def _resolve_sample_rate(self, requested, config):
+        """Return the rate to actually ask the device for.
+
+        Devices advertise exact values such as 8e6/7 = 1230769.230769 and
+        refuse anything else, so a user typing the rounded figure is snapped
+        onto the advertised one rather than rejected. If nothing matches, the
+        error names the nearest supported rates -- the raw device list runs to
+        hundreds of entries, which is no answer to "what should I use?".
+        """
+        from core.rf.backend_config import nearest_sample_rates
+
+        try:
+            ranges = self.soapy_source_0.get_sample_rate_range(0)
+        except Exception:
+            return requested  # Driver does not advertise its rates.
+
+        if not ranges:
+            return requested
+
+        tolerance = max(1.0, requested * 1e-6)
+        discrete = []
+        for entry in ranges:
+            low, high = entry.minimum(), entry.maximum()
+            if low == high:
+                discrete.append(low)
+                if abs(requested - low) <= tolerance:
+                    return low
+            elif low <= requested <= high:
+                return requested
+
+        if not discrete:
+            return requested  # Continuous ranges only; let Soapy complain.
+
+        suggestions = nearest_sample_rates(discrete, requested)
+        hint = "Nearest rates this device supports: " + ", ".join(
+            f"{rate:.0f}" for rate in suggestions
+        )
+        raise ValueError(
+            f"This device cannot sample at {requested:.0f} Hz. {hint}"
+        )
+
 def _parse_args(argv=None):
     import argparse
 
@@ -306,6 +382,14 @@ def _print_dry_run(config):
     print("[sdr]")
     for field_name in config.sdr.__dataclass_fields__:
         print(f"  {field_name} = {getattr(config.sdr, field_name)!r}")
+    # Resolved view of the two settings that decide whether the device opens
+    # at all, so a failing driver can be diagnosed without starting the SDR.
+    print("[sdr.resolved]")
+    print(f"  device_string = {config.sdr.device_string()!r}")
+    print(f"  stream_args = {config.sdr.resolved_stream_args()!r}")
+    print(f"  antenna = {config.sdr.antenna or '(driver default)'}")
+    bandwidth = config.sdr.resolved_bandwidth()
+    print(f"  bandwidth = {bandwidth if bandwidth else '(device default)'}")
     print("[channelizer]")
     for field_name in config.channelizer.__dataclass_fields__:
         print(f"  {field_name} = {getattr(config.channelizer, field_name)!r}")
@@ -314,6 +398,7 @@ def _print_dry_run(config):
     print(f"  samp_rate_post_resamp1 = {rates.samp_rate_post_resamp1}")
     print(f"  samp_rate_post_pfb (bin width) = {rates.samp_rate_post_pfb}")
     print(f"  demod_samp_rate = {rates.demod_samp_rate}")
+    print(f"  bin_width_error = {rates.bin_width_error_hz:+.4f} Hz")
     print(f"  channel_map = {rates.channel_map}")
 
 

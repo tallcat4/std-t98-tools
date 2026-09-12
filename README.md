@@ -173,9 +173,62 @@ python std_t98_30ch_multi_rf_backend.py \
 python std_t98_30ch_multi_rf_backend.py --config config.toml --dry-run
 ```
 
-主な CLI 引数: `--config` / `--driver` / `--sample-rate` / `--freq` / `--gain` / `--gain-element` / `--agc` / `--no-agc` / `--bias-tee` / `--no-bias-tee` / `--freq-correction` / `--pfb-channels` / `--dry-run`。
+主な CLI 引数: `--config` / `--driver` / `--device-args` / `--stream-args` / `--sample-rate` / `--freq` / `--gain` / `--gain-element` / `--antenna` / `--bandwidth` / `--agc` / `--no-agc` / `--bias-tee` / `--no-bias-tee` / `--freq-correction` / `--pfb-channels` / `--dry-run`。
+
+### デバイスの指定
+
+`--driver` はドライバ種別を選ぶだけなので、同型の SDR が複数繋がっている場合や、ドライバに機種を教える必要がある場合は `--device-args` を併用します。内容は SoapySDR のデバイス文字列に `driver=<driver>,<device_args>` の形でそのまま連結されます。接続されているデバイスとその引数は `SoapySDRUtil --find` で確認できます。
+
+```bash
+# シリアルで 1 台を指定
+python std_t98_30ch_multi_rf_backend.py --driver rtlsdr --device-args "serial=00000001"
+
+# USRP の機種を明示
+python std_t98_30ch_multi_rf_backend.py --driver uhd --device-args "type=b200"
+```
+
+### ストリーム引数
+
+`stream_args` はドライバごとに既定値が変わります。未指定の場合、RTL-SDR には従来どおり `bufflen=16384` が渡り、それ以外のドライバには何も渡しません。SoapySDR はデバイスが公開していないストリーム引数を受け取ると `Unsupported stream argument` でソース生成そのものに失敗するため、RTL-SDR 用の `bufflen` を USRP や HackRF に渡してはいけません。この既定のおかげで `--driver` を差し替えるだけで別の SDR に切り替えられます。
+
+明示指定したい場合のみ `--stream-args` を使い、何も渡したくない場合は空文字 `""` を指定します。
+
+### サンプルレート
+
+対応レートはデバイスによって大きく異なります。既定の 1.2MHz は RTL-SDR では使えますが、USRP B210 系は離散的なレートしか持たず 1.2MHz を含みません。非対応のレートを指定した場合は起動時に失敗し、**そのデバイスで使える近いレート**を提示します。
+
+```
+ValueError: This device cannot sample at 1200000 Hz.
+Nearest rates this device supports: 1230769, 1142857, 1066667, 1333333, 1000000
+```
+
+デバイスの公称値は `1230769.230769...` のような端数を持つことがありますが、丸めた値を指定しても自動的に公称値へスナップするので、上の表示をそのまま渡せます。
+
+レートを変えてもチャンネライザは 6.25kHz ラスタを保つよう初段リサンプラ比を計算し直します。この比は分母を制限した有理近似なので厳密には誤差が出ますが、実測では最悪でも 0.1Hz 程度（6250Hz のビン幅に対して）です。実際の誤差は `--dry-run` の `bin_width_error` で確認できます。
+
+設定したレートは適用後に読み戻して検証します。黙って別のレートに丸めるドライバがあると、全チャネルが同調を外すためです。
+
+### アナログ帯域幅
+
+`--bandwidth` はフロントエンドのアナログフィルタ幅です。未指定の場合、RTL-SDR 以外のドライバでは **サンプルレートと同じ値**を設定します。RTL-SDR はレートに追従して自前で設定するため触りません。
+
+これは実害のある既定です。USRP B210 は何も指定しないと **56MHz 全開**のままで、2MHz でサンプリングしていても ±28MHz の信号がすべて折り返して混入します。`0` を指定するとデバイス任せになります。
+
+### アンテナポート
+
+RX ポートが複数ある機種では `--antenna` でどの端子から受けるかを選びます。未指定ならドライバ既定のままにするので、入力が 1 つしかない RTL-SDR では何も起きません。USRP B210 系は `TX/RX` と `RX2` を持ち、既定は `RX2` です（基板上の `RXA` 端子に対応。`TX/RX` は `TRXA`）。**アンテナを挿した端子と選択が一致していないと、何も受信できないのに正常動作しているように見えます。**
+
+存在しない名前を指定した場合は起動時に即座に失敗し、利用可能な名前を表示します。
+
+```bash
+python std_t98_30ch_multi_rf_backend.py --driver uhd --antenna "TX/RX"
+```
+
+### デバイス依存機能の扱い
 
 ゲイン要素名（`gain_element`）は RTL-SDR では `TUNER` が既定ですが、デバイスにその要素が無い場合や空文字を指定した場合はデバイス全体のゲインを設定します。bias tee や周波数補正 (ppm) は、デバイスが対応している場合のみ適用され、非対応でもエラーにはなりません。
+
+`--dry-run` は解決後のデバイス文字列とストリーム引数を `[sdr.resolved]` として表示するため、実機を開く前に「実際に SoapySDR へ何が渡るか」を確認できます。
 
 ## 使い方
 
