@@ -1,0 +1,20 @@
+# RF backend (std_t98_30ch_multi_rf_backend.py) and the protocol service.
+#
+# GNU Radio, gr-soapy and SoapySDR are NOT installable from PyPI in any usable
+# form: they are compiled packages with their own device driver modules, so
+# they must come from the distribution or from radioconda. Install them first,
+# then use this file for the rest. See README "動作要件" for per-distro
+# commands and the versions this has been run against.
+#
+# Required system packages (Debian/Ubuntu names):
+#   gnuradio            -- GNU Radio runtime, includes gnuradio.soapy
+#   libsoapysdr0.8      -- SoapySDR abstraction library
+#   soapysdr-module-*   -- one per SDR you use, e.g. soapysdr-module-rtlsdr,
+#                          soapysdr-module-uhd, soapysdr-module-hackrf
+#   soapysdr-tools      -- provides SoapySDRUtil for device discovery
+#
+# Verify with:
+#   python3 -c "from gnuradio import gr, soapy; print(gr.version())"
+#   SoapySDRUtil --find
+
+numpy>=1.24,<2

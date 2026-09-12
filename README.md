@@ -90,14 +90,63 @@ launcher は別経路で各プロセスの `StatusPacket` を集約し、チャ�
 
 ## 動作要件
 
-- Linux
-- GNU Radio / SoapySDR / RTL-SDR が使える Python 環境
-- `pyambelib`、`sounddevice`、`torch`、`safetensors` が使える Python 環境
-- `rich` が入っていると launcher dashboard は安定した live 描画を使います。未導入時は簡易表示へフォールバックします。
+Linux 専用です（IPC に `AF_UNIX` の `SOCK_SEQPACKET` を使います）。
+
+依存は **RF 系** と **音声系** に分かれており、両方を 1 つの Python 環境に入れる必要はありません。launcher が backend 用 Python と service 用 Python を別々に解決するのは、この分割を前提にしているためです。既定では service 側に `env/bin/python`、backend 側にシステム Python を優先します。
+
+| 区分 | 対象プロセス | 依存 | ファイル |
+| --- | --- | --- | --- |
+| RF 系 | RF backend / protocol service | GNU Radio（`gnuradio.soapy` 込み）、SoapySDR とデバイス別モジュール、`numpy` | `requirements-rf.txt` |
+| 音声系 | audio service / secret service | `sounddevice`（+ PortAudio）、`pyambelib`、`torch`、`safetensors`、`numpy` | `requirements-audio.txt` |
+| 開発 | テスト | `pytest` | `requirements-dev.txt` |
+
+GNU Radio と SoapySDR は PyPI からは入りません。ディストリのパッケージか radioconda を使ってください。
+
+```bash
+# Debian / Ubuntu の例（使う SDR の module だけ入れれば十分です）
+sudo apt install gnuradio libsoapysdr0.8 soapysdr-tools \
+    soapysdr-module-rtlsdr soapysdr-module-uhd soapysdr-module-hackrf
+pip install -r requirements-rf.txt
+
+# 音声系（別環境でも可）
+sudo apt install libportaudio2
+pip install -r requirements-audio.txt
+```
+
+`pyambelib` は PyPI に無いため `requirements-audio.txt` には含めていません。AMBE 復号を使う場合は別途ソースから導入してください。未導入でも音声復号以外は動作します。
+
+`rich` が入っていると launcher dashboard は安定した live 描画を使います。未導入時は簡易表示へフォールバックします。
+
+導入後の確認:
+
+```bash
+python3 -c "from gnuradio import gr, soapy; print(gr.version())"
+SoapySDRUtil --find          # 接続中の SDR とそのデバイス引数を表示
+```
+
+### 動作確認済みバージョン
+
+以下の組み合わせで RF バックエンドのフローグラフ構築まで確認しています。
+
+| 項目 | バージョン |
+| --- | --- |
+| OS | Ubuntu 24.04 (Linux 7.0) |
+| Python | 3.12.3 |
+| GNU Radio | 3.10.9.2 |
+| SoapySDR | 0.8.1（API 0.8.0） |
+| numpy | 1.26.4 |
 
 学習済みモデルは `models/secret_voice/` に同梱されています。実行時に外部プロジェクトのパスを参照する前提にはしていません。
 
-launcher は backend 用 Python と service 用 Python を別々に解決できます。既定では service 側に `env/bin/python`、backend 側にシステム Python を優先します。
+## テスト
+
+```bash
+python3 -m venv --system-site-packages .venv   # GNU Radio を見せるため system-site-packages
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest tests -q
+```
+
+`tests/test_multi_audio_service.py` だけは音声系依存（`sounddevice`）を必要とします。RF 系のみの環境では `--ignore=tests/test_multi_audio_service.py` を付けてください。GNU Radio 非依存のテストは `python3 -m unittest tests.test_backend_config` でも実行できます。
 
 ## SDR 設定
 

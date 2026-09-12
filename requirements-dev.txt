@@ -1,0 +1,4 @@
+# Test tooling. The test suite itself needs numpy (see requirements-rf.txt);
+# tests/test_multi_audio_service.py additionally imports the audio stack.
+
+pytest>=7
