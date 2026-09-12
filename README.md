@@ -138,16 +138,6 @@ SoapySDRUtil --find          # 接続中の SDR とそのデバイス引数を�
 
 学習済みモデルは `models/secret_voice/` に同梱されています。実行時に外部プロジェクトのパスを参照する前提にはしていません。
 
-## テスト
-
-```bash
-python3 -m venv --system-site-packages .venv   # GNU Radio を見せるため system-site-packages
-.venv/bin/pip install -r requirements-dev.txt
-.venv/bin/python -m pytest tests -q
-```
-
-`tests/test_multi_audio_service.py` だけは音声系依存（`sounddevice`）を必要とします。RF 系のみの環境では `--ignore=tests/test_multi_audio_service.py` を付けてください。GNU Radio 非依存のテストは `python3 -m unittest tests.test_backend_config` でも実行できます。
-
 ## SDR 設定
 
 RF バックエンドは SoapySDR 経由で SDR を駆動するため、RTL-SDR に限らず、対応ドライバがあれば USRP (`uhd`) / HackRF (`hackrf`) / Airspy などにも切り替えられます。SDR 固有の値（ドライバ、サンプルレート、周波数、ゲイン、周波数誤差校正など）はソースにベタ書きせず、TOML 設定ファイルと CLI 引数で与えます。
@@ -270,6 +260,40 @@ python std_t98_30ch_multi_rf_backend.py --driver uhd --antenna "TX/RX"
 ./env/bin/python std_t98_multi_service_launcher.py --dry-run
 ```
 
+## 音声スタックなしで受信を確認する
+
+新しい SDR や新しい環境に移したとき、まず確かめたいのは「RF 段が正しく受信できているか」です。これは **音声系の依存（`pyambelib` / `torch` / `sounddevice`）を一切入れずに**確認できます。protocol service は numpy だけで動き、voice socket は自分で bind するため、audio service が居なくても待ち続けたりはしません。
+
+手順は 2 プロセスです。backend が frame socket を bind し、protocol service がそこへ接続するので、**起動順は backend が先**です。
+
+```bash
+# 1) 実機を開く前に、解決後の設定を確認する
+python3 std_t98_30ch_multi_rf_backend.py --dry-run --driver uhd --sample-rate 2000000     --gain-element PGA --antenna RX2
+
+# 2) RF backend（この端末は開いたままにする）
+python3 std_t98_30ch_multi_rf_backend.py --driver uhd --sample-rate 2000000     --gain-element PGA --no-agc --gain 40 --antenna RX2
+
+# 3) 別端末で protocol service
+python3 std_t98_multi_protocol_service.py
+```
+
+正常なら protocol service 側に dashboard が出ます。無信号のときは次の表示になります。
+
+```
+[STD-T98 Multi Protocol Service]
+  Waiting for signals...
+```
+
+電波を受けると各チャンネルの行が現れ、sync / frame / SACCH の成否が更新されます。`--headless` を付けると dashboard を止めて、`--status-socket` 経由の指標だけを流せます。
+
+うまくいかないときの切り分け順:
+
+1. `SoapySDRUtil --find` — デバイスが見えるか
+2. `--dry-run` の `[sdr.resolved]` — device string・stream args・antenna・bandwidth が意図どおりか
+3. backend が例外なく走り続けるか（レート非対応なら起動時に候補付きで失敗します）
+4. **アンテナを挿した端子と `--antenna` が一致しているか** — ここがズレていると、エラーも警告も出ないまま永久に受信しません
+5. それでも `sync=0` なら、単にその時間帯に電波が出ていない可能性があります
+
 ## 状態確認とデバッグ
 
 launcher の dashboard には、各チャンネルの RX 状態、protocol / audio / secret の状態、SACCH 情報、秘話鍵状態が表示されます。
@@ -287,11 +311,17 @@ launcher の dashboard には、各チャンネルの RX 状態、protocol / aud
 
 ## テスト
 
-仮想環境に `pytest` が入っていれば、次で回帰テストを実行できます。
+`env/` は launcher が service 用 Python として探すパスなので、テスト用の環境は `.venv/` に分けます。GNU Radio は distro パッケージなので `--system-site-packages` が要ります。
 
 ```bash
-./env/bin/python -m pytest
+python3 -m venv --system-site-packages .venv
+.venv/bin/pip install -r requirements-dev.txt
+.venv/bin/python -m pytest tests -q
 ```
+
+`tests/test_multi_audio_service.py` だけは音声系依存（`sounddevice`）を必要とします。RF 系のみの環境では `--ignore=tests/test_multi_audio_service.py` を付けてください。GNU Radio にも依存しないテストは `python3 -m unittest tests.test_backend_config` だけでも実行できます。
+
+音声スタックまで揃った環境なら `./env/bin/python -m pytest` でも同じものが回ります。
 
 ## トラブルシューティング
 
