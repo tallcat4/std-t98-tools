@@ -47,7 +47,7 @@ launcher は別経路で各プロセスの `StatusPacket` を集約し、チャ�
 - `std_t98_multi_service_launcher.py`
   - backend / protocol / audio / secret の起動順制御、Python 実行環境の解決、status 集約、dashboard 表示を担当します。
 - `std_t98_30ch_multi_rf_backend.py`
-  - RTL-SDR を中心周波数 351.29375 MHz / サンプルレート 1.2 MHz で動作させ、PFB チャンネライザを使って 30 チャンネルを並列に処理する RF バックエンドです。
+  - SoapySDR 経由で SDR を駆動し、PFB チャンネライザを使って 30 チャンネルを並列に処理する RF バックエンドです。既定では RTL-SDR / 中心周波数 351.29375 MHz / サンプルレート 1.2 MHz で動作しますが、これらは設定ファイルおよび CLI で変更できます（後述の「SDR 設定」参照）。
 - `std_t98_multi_protocol_service.py`
   - `FramePacket` を受け取り、デホワイトニング、RICH / SACCH / PICH / TCH 解析を行うフロントエンドです。
 - `std_t98_multi_audio_service.py`
@@ -98,6 +98,35 @@ launcher は別経路で各プロセスの `StatusPacket` を集約し、チャ�
 学習済みモデルは `models/secret_voice/` に同梱されています。実行時に外部プロジェクトのパスを参照する前提にはしていません。
 
 launcher は backend 用 Python と service 用 Python を別々に解決できます。既定では service 側に `env/bin/python`、backend 側にシステム Python を優先します。
+
+## SDR 設定
+
+RF バックエンドは SoapySDR 経由で SDR を駆動するため、RTL-SDR に限らず、対応ドライバがあれば USRP (`uhd`) / HackRF (`hackrf`) / Airspy などにも切り替えられます。SDR 固有の値（ドライバ、サンプルレート、周波数、ゲイン、周波数誤差校正など）はソースにベタ書きせず、TOML 設定ファイルと CLI 引数で与えます。
+
+- 既定値は従来の RTL-SDR / 1.2 MHz の挙動を完全に再現します。何も指定しなければ従来どおり動きます。
+- 設定の優先順位は「組み込み既定値 → 設定ファイル → CLI 引数」で、後のものが前を上書きします。
+- チャンネライザのレート（初段リサンプラ比・PFB 段数由来の中間レート）は、サンプルレートから自動導出します。STD-T98 の 6.25 kHz ラスタを保つよう計算されるため、`sample_rate` を変えても PFB ビン幅は 6.25 kHz に保たれます。
+
+設定例は `config.example.toml` にあります。コピーして使ってください。
+
+```bash
+# 設定ファイルで起動
+python std_t98_30ch_multi_rf_backend.py --config config.toml
+
+# 環境変数でパスを渡す
+STD_T98_BACKEND_CONFIG=config.toml python std_t98_30ch_multi_rf_backend.py
+
+# CLI で個別に上書き（USRP を 2 MHz、AGC 無効、ゲイン 40、全体ゲインを使用）
+python std_t98_30ch_multi_rf_backend.py \
+    --driver uhd --sample-rate 2000000 --no-agc --gain 40 --gain-element ""
+
+# 実機を開かずに、解決後の設定と導出レートだけ確認する
+python std_t98_30ch_multi_rf_backend.py --config config.toml --dry-run
+```
+
+主な CLI 引数: `--config` / `--driver` / `--sample-rate` / `--freq` / `--gain` / `--gain-element` / `--agc` / `--no-agc` / `--bias-tee` / `--no-bias-tee` / `--freq-correction` / `--pfb-channels` / `--dry-run`。
+
+ゲイン要素名（`gain_element`）は RTL-SDR では `TUNER` が既定ですが、デバイスにその要素が無い場合や空文字を指定した場合はデバイス全体のゲインを設定します。bias tee や周波数補正 (ppm) は、デバイスが対応している場合のみ適用され、非対応でもエラーにはなりません。
 
 ## 使い方
 

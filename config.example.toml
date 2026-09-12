@@ -1,0 +1,63 @@
+# STD-T98 RF backend configuration (example).
+#
+# Copy to e.g. config.toml and pass with:
+#   python std_t98_30ch_multi_rf_backend.py --config config.toml
+# or point the STD_T98_BACKEND_CONFIG environment variable at it.
+# Any value can also be overridden on the command line (CLI wins over the file).
+#
+# All values below are the built-in defaults, which reproduce the historical
+# RTL-SDR / 1.2 MHz behaviour exactly. Only the keys you change need to be
+# present; omitted keys fall back to these defaults.
+
+[sdr]
+# SoapySDR driver key. Examples: "rtlsdr", "uhd" (USRP), "hackrf", "airspy".
+driver = "rtlsdr"
+
+# Input sample rate in Hz. The channelizer rates are derived from this, so any
+# rate that keeps a 6.25 kHz PFB bin achievable will work (e.g. USRP 2_000_000).
+sample_rate = 1_200_000
+
+# Center (tuned) frequency in Hz. STD-T98 band center: 351.29375 MHz.
+center_freq = 351_293_750
+
+# Deliberate tuning offset (Hz), applied on top of center_freq.
+freq_offset = 0
+
+# Per-device frequency error correction (Hz). This is calibration for a
+# specific radio and should be re-measured per device.
+freq_err_offset = -340
+
+# Frequency correction in ppm (SoapySDR set_frequency_correction). Ignored on
+# devices that do not support it.
+freq_correction = 0
+
+# Manual tuner gain, used when agc = false.
+tuner_gain = 30
+
+# Hardware AGC. Devices without an AGC mode ignore this.
+agc = true
+
+# Bias tee power. Only applied on devices exposing a "biastee" setting.
+bias_tee = false
+
+# SoapySDR gain element name to drive in manual mode. "TUNER" suits RTL-SDR;
+# leave empty ("") to set the device's overall gain (works for e.g. USRP).
+gain_element = "TUNER"
+
+# Extra SoapySDR stream arguments.
+stream_args = "bufflen=16384"
+
+[channelizer]
+# 6.25 kHz STD-T98 channel raster. This is a protocol constant; changing it
+# only makes sense if the standard's raster changes.
+channel_spacing = 6250
+
+# Number of decoded channels.
+num_channels = 30
+
+# PFB channel count. Must be >= num_channels. A larger value adds guard bins
+# (attached to null sinks) and changes the channelizer input rate.
+pfb_num_channels = 48
+
+# Per-channel upsample factor before demodulation.
+resamp2_interp = 10

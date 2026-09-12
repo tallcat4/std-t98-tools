@@ -22,43 +22,48 @@ import std_t98_multi_sync as sync_word_corr  # embedded python block
 import threading
 
 from firdes import make_rx_taps
+from core.rf.backend_config import BackendConfig, derive_rates
 
 class test3(gr.top_block):
 
-    def __init__(self):
+    def __init__(self, config: BackendConfig | None = None):
         gr.top_block.__init__(self, "Test 3", catch_exceptions=True)
         self.flowgraph_started = threading.Event()
+
+        self.config = config = config or BackendConfig()
+        sdr_cfg = config.sdr
+        rates = derive_rates(sdr_cfg, config.channelizer)
 
         ##################################################
         # 1. SDR / RF Parameters
         ##################################################
-        self.rf_samp_rate = rf_samp_rate = 1.2e6
-        self.rf_freq = rf_freq = 351.29375e6
-        self.freq_offset = freq_offset = 0
-        self.freq_err_offset = freq_err_offset = -340
-        
-        self.sdr_tuner_gain = sdr_tuner_gain = 30
-        self.sdr_agc_enabled = sdr_agc_enabled = True
-        self.sdr_biastee_enabled = sdr_biastee_enabled = False
-        self.sdr_freq_corr = sdr_freq_corr = 0
+        self.rf_samp_rate = rf_samp_rate = sdr_cfg.sample_rate
+        self.rf_freq = rf_freq = sdr_cfg.center_freq
+        self.freq_offset = freq_offset = sdr_cfg.freq_offset
+        self.freq_err_offset = freq_err_offset = sdr_cfg.freq_err_offset
+
+        self.sdr_tuner_gain = sdr_tuner_gain = sdr_cfg.tuner_gain
+        self.sdr_agc_enabled = sdr_agc_enabled = sdr_cfg.agc
+        self.sdr_biastee_enabled = sdr_biastee_enabled = sdr_cfg.bias_tee
+        self.sdr_freq_corr = sdr_freq_corr = sdr_cfg.freq_correction
 
         ##################################################
-        # 2. Resampling & Channelization Rates
+        # 2. Resampling & Channelization Rates (derived from sample rate)
         ##################################################
-        # Stage 1: Initial Decimation
-        self.resamp1_interp = resamp1_interp = 1
-        self.resamp1_decim = resamp1_decim = 4  
-        self.samp_rate_post_resamp1 = samp_rate_post_resamp1 = rf_samp_rate * resamp1_interp / resamp1_decim
-        
+        # Stage 1: Initial resampling to the channelizer input rate
+        self.resamp1_interp = resamp1_interp = rates.resamp1_interp
+        self.resamp1_decim = resamp1_decim = rates.resamp1_decim
+        self.samp_rate_post_resamp1 = samp_rate_post_resamp1 = rates.samp_rate_post_resamp1
+
         # Stage 2: PFB Channelizer
-        self.pfb_num_channels = pfb_num_channels = 48
-        self.num_channels = num_channels = 30
-        self.samp_rate_post_pfb = samp_rate_post_pfb = samp_rate_post_resamp1 / pfb_num_channels
-        
+        self.pfb_num_channels = pfb_num_channels = rates.pfb_num_channels
+        self.num_channels = num_channels = config.channelizer.num_channels
+        self.samp_rate_post_pfb = samp_rate_post_pfb = rates.samp_rate_post_pfb
+
         # Stage 3: Second Resampling (per channel)
-        self.resamp2_interp = resamp2_interp = 10
-        self.resamp2_decim = resamp2_decim = 1
-        self.demod_samp_rate = demod_samp_rate = samp_rate_post_pfb * resamp2_interp / resamp2_decim
+        self.resamp2_interp = resamp2_interp = rates.resamp2_interp
+        self.resamp2_decim = resamp2_decim = rates.resamp2_decim
+        self.demod_samp_rate = demod_samp_rate = rates.demod_samp_rate
 
         ##################################################
         # 3. Demodulation Parameters
@@ -118,39 +123,68 @@ class test3(gr.top_block):
         ##################################################
         # Blocks
         ##################################################
-        self.soapy_rtlsdr_source_0 = None
-        dev = 'driver=rtlsdr'
-        stream_args = 'bufflen=16384'
+        self.soapy_source_0 = None
+        dev = sdr_cfg.device_string()
+        stream_args = sdr_cfg.stream_args
         tune_args = ['']
         settings = ['']
+        gain_element = sdr_cfg.gain_element
 
-        def _set_soapy_rtlsdr_source_0_gain_mode(channel, agc):
-            self.soapy_rtlsdr_source_0.set_gain_mode(channel, agc)
+        def _set_soapy_source_0_gain_mode(channel, agc):
+            # Not every SoapySDR device exposes an automatic gain mode.
+            if not self._soapy_source_0_has_agc:
+                return
+            self.soapy_source_0.set_gain_mode(channel, agc)
             if not agc:
-                  self.soapy_rtlsdr_source_0.set_gain(channel, self._soapy_rtlsdr_source_0_gain_value)
-        self.set_soapy_rtlsdr_source_0_gain_mode = _set_soapy_rtlsdr_source_0_gain_mode
+                self._apply_manual_gain(channel, self._soapy_source_0_gain_value)
+        self.set_soapy_source_0_gain_mode = _set_soapy_source_0_gain_mode
 
-        def _set_soapy_rtlsdr_source_0_gain(channel, name, gain):
-            self._soapy_rtlsdr_source_0_gain_value = gain
-            if not self.soapy_rtlsdr_source_0.get_gain_mode(channel):
-                self.soapy_rtlsdr_source_0.set_gain(channel, gain)
-        self.set_soapy_rtlsdr_source_0_gain = _set_soapy_rtlsdr_source_0_gain
+        def _apply_manual_gain(channel, gain):
+            # Prefer a named gain element when the device (and config) name one;
+            # fall back to the overall gain otherwise.
+            if gain_element and gain_element in self._soapy_source_0_gain_names:
+                self.soapy_source_0.set_gain(channel, gain_element, gain)
+            else:
+                self.soapy_source_0.set_gain(channel, gain)
+        self._apply_manual_gain = _apply_manual_gain
 
-        def _set_soapy_rtlsdr_source_0_bias(bias):
-            if 'biastee' in self._soapy_rtlsdr_source_0_setting_keys:
-                self.soapy_rtlsdr_source_0.write_setting('biastee', bias)
-        self.set_soapy_rtlsdr_source_0_bias = _set_soapy_rtlsdr_source_0_bias
+        def _set_soapy_source_0_gain(channel, gain):
+            self._soapy_source_0_gain_value = gain
+            if self._soapy_source_0_has_agc and self.soapy_source_0.get_gain_mode(channel):
+                return
+            self._apply_manual_gain(channel, gain)
+        self.set_soapy_source_0_gain = _set_soapy_source_0_gain
 
-        self.soapy_rtlsdr_source_0 = soapy.source(dev, "fc32", 1, '', stream_args, tune_args, settings)
-        self._soapy_rtlsdr_source_0_setting_keys =[a.key for a in self.soapy_rtlsdr_source_0.get_setting_info()]
+        def _set_soapy_source_0_bias(bias):
+            if 'biastee' in self._soapy_source_0_setting_keys:
+                self.soapy_source_0.write_setting('biastee', bias)
+        self.set_soapy_source_0_bias = _set_soapy_source_0_bias
 
-        self.soapy_rtlsdr_source_0.set_sample_rate(0, rf_samp_rate)
-        self.soapy_rtlsdr_source_0.set_frequency(0, (rf_freq + freq_offset + freq_err_offset))
-        self.soapy_rtlsdr_source_0.set_frequency_correction(0, sdr_freq_corr)
-        self.set_soapy_rtlsdr_source_0_bias(bool(sdr_biastee_enabled))
-        self._soapy_rtlsdr_source_0_gain_value = sdr_tuner_gain
-        self.set_soapy_rtlsdr_source_0_gain_mode(0, bool(sdr_agc_enabled))
-        self.set_soapy_rtlsdr_source_0_gain(0, 'TUNER', sdr_tuner_gain)
+        self.soapy_source_0 = soapy.source(dev, "fc32", 1, '', stream_args, tune_args, settings)
+        self._soapy_source_0_setting_keys = [a.key for a in self.soapy_source_0.get_setting_info()]
+        try:
+            self._soapy_source_0_gain_names = list(self.soapy_source_0.list_gains(0))
+        except Exception:
+            self._soapy_source_0_gain_names = []
+        try:
+            self._soapy_source_0_has_agc = bool(self.soapy_source_0.has_gain_mode(0))
+        except Exception:
+            self._soapy_source_0_has_agc = True
+
+        self.soapy_source_0.set_sample_rate(0, rf_samp_rate)
+        self.soapy_source_0.set_frequency(0, (rf_freq + freq_offset + freq_err_offset))
+        if sdr_freq_corr:
+            try:
+                self.soapy_source_0.set_frequency_correction(0, sdr_freq_corr)
+            except Exception:
+                pass
+        self.set_soapy_source_0_bias(bool(sdr_biastee_enabled))
+        self._soapy_source_0_gain_value = sdr_tuner_gain
+        self.set_soapy_source_0_gain_mode(0, bool(sdr_agc_enabled))
+        self.set_soapy_source_0_gain(0, sdr_tuner_gain)
+
+        # Backwards-compatible aliases (older references used the rtlsdr names).
+        self.soapy_rtlsdr_source_0 = self.soapy_source_0
 
         self.blocks_throttle_1 = blocks.throttle(gr.sizeof_gr_complex*1, rf_samp_rate, True, throttle_max_items_per_block)
         self.blocks_freqshift_cc_0 = blocks.rotator_cc(rotator_phase_inc)
@@ -170,19 +204,11 @@ class test3(gr.top_block):
             1.0
         )
         
-        # CH1(-93.75k) = Bin 33, CH15(-6.25k) = Bin 47
-        # CH16(0) = Bin 0
-        # CH17(+6.25k) = Bin 1, CH30(+87.5k) = Bin 14
-        self.channel_map = [
-            # Port 0-14  (CH1-15) -> Bin 33-47
-            33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47,
-            # Port 15    (CH16) -> Bin 0
-            0,
-            # Port 16-29 (CH17-30) -> Bin 1-14
-            1,  2,  3,  4,  5,  6,  7,  8,  9,  10, 11, 12, 13, 14,
-            # Port 30-47 (Unused) -> Bin 15-32 (Null Sink)
-            15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32
-        ]
+        # Ports 0..neg-1 -> top FFT bins (negative freqs, CH below centre),
+        # port neg -> bin 0 (centre channel), then low positive bins, then the
+        # unused bins (attached to null sinks below). Derived from the channel
+        # counts so it tracks pfb_num_channels / num_channels automatically.
+        self.channel_map = rates.channel_map
         self.pfb_channelizer_ccf_0.set_channel_map(self.channel_map)
         
         ##################################################
@@ -236,7 +262,7 @@ class test3(gr.top_block):
         ##################################################
         # Connections
         ##################################################
-        self.connect((self.soapy_rtlsdr_source_0, 0), (self.blocks_throttle_1, 0))
+        self.connect((self.soapy_source_0, 0), (self.blocks_throttle_1, 0))
         self.connect((self.blocks_throttle_1, 0), (self.blocks_freqshift_cc_0, 0))
         self.connect((self.blocks_freqshift_cc_0, 0), (self.rational_resampler_1, 0))
         self.connect((self.rational_resampler_1, 0), (self.pfb_channelizer_ccf_0, 0))
@@ -257,8 +283,50 @@ class test3(gr.top_block):
             self.null_sinks.append(ns)
             self.connect((self.pfb_channelizer_ccf_0, ch), (ns, 0))
 
+def _parse_args(argv=None):
+    import argparse
+
+    from core.rf.backend_config import add_config_arguments
+
+    parser = argparse.ArgumentParser(
+        description="STD-T98 30ch multi-channel RF backend (SoapySDR)."
+    )
+    add_config_arguments(parser)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the resolved config and derived rates, then exit without "
+        "opening the SDR or starting the flowgraph.",
+    )
+    return parser.parse_args(argv)
+
+
+def _print_dry_run(config):
+    rates = derive_rates(config.sdr, config.channelizer)
+    print("[sdr]")
+    for field_name in config.sdr.__dataclass_fields__:
+        print(f"  {field_name} = {getattr(config.sdr, field_name)!r}")
+    print("[channelizer]")
+    for field_name in config.channelizer.__dataclass_fields__:
+        print(f"  {field_name} = {getattr(config.channelizer, field_name)!r}")
+    print("[derived]")
+    print(f"  resamp1 = {rates.resamp1_interp}/{rates.resamp1_decim}")
+    print(f"  samp_rate_post_resamp1 = {rates.samp_rate_post_resamp1}")
+    print(f"  samp_rate_post_pfb (bin width) = {rates.samp_rate_post_pfb}")
+    print(f"  demod_samp_rate = {rates.demod_samp_rate}")
+    print(f"  channel_map = {rates.channel_map}")
+
+
 def main(top_block_cls=test3, options=None):
-    tb = top_block_cls()
+    from core.rf.backend_config import load_config
+
+    args = _parse_args()
+    config = load_config(args)
+    if args.dry_run:
+        _print_dry_run(config)
+        return
+
+    tb = top_block_cls(config=config)
 
     def sig_handler(sig=None, frame=None):
         tb.stop()
