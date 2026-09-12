@@ -155,12 +155,17 @@ class ChannelScope(gr.top_block, Qt.QWidget):
         self.ch_spectrum.enable_grid(True)
         top.addWidget(sip.wrapinstance(self.ch_spectrum.qwidget(), Qt.QWidget))
 
-        # Two symbol periods across the display is the conventional eye.
-        self.eye = qtgui.eye_sink_f(
-            int(sps * 2), demod_samp_rate, 1, None)
-        self.eye.set_y_axis(-1.5, 1.5)
-        self.eye.enable_grid(True)
+        # The first argument is the working buffer, not the trace length --
+        # passing two symbols' worth leaves the sink with too little to work
+        # with and it draws the axes but never a trace. The display is always
+        # two symbols wide, set by samp_per_symbol.
+        self.eye = qtgui.eye_sink_f(1024, demod_samp_rate, 1, None)
         self.eye.set_samp_per_symbol(int(round(sps)))
+        # Wide enough that a signal riding on a frequency-error DC offset is
+        # still fully visible, rather than clipped off the top.
+        self.eye.set_y_axis(-2.0, 2.0)
+        self.eye.enable_grid(True)
+        self.eye.set_update_time(0.10)
         bottom.addWidget(sip.wrapinstance(self.eye.qwidget(), Qt.QWidget))
 
         self.symbols = qtgui.time_sink_f(
