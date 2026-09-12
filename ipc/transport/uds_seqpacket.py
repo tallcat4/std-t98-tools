@@ -27,25 +27,59 @@ def _validate_packet_send(sent: int, payload: bytes) -> int:
     return sent
 
 
-DEFAULT_MULTI_FRAME_SOCKET_PATH = os.environ.get(
-    "STD_T98_MULTI_FRAME_SOCKET",
-    "/tmp/std_t98_multi_frame.sock",
+# Socket location. /tmp is world-writable and shared between users, so two
+# people running this on the same machine collide on the same paths and a stale
+# socket from a dead run is left for anyone to replace. XDG_RUNTIME_DIR is the
+# per-user, 0700, auto-cleaned directory meant for exactly this, so prefer it
+# and keep /tmp only as the fallback for environments that do not set it.
+RUNTIME_DIR_ENV_VAR = "STD_T98_RUNTIME_DIR"
+_RUNTIME_SUBDIR = "std-t98"
+_FALLBACK_SOCKET_DIR = "/tmp"
+
+# AF_UNIX paths are capped by sun_path (108 bytes on Linux, minus the NUL).
+# A long XDG_RUNTIME_DIR would otherwise fail at bind() with a bad error.
+_MAX_UNIX_SOCKET_PATH_LEN = 107
+
+
+def socket_dir() -> str:
+    """Directory the default socket paths live in."""
+    override = os.environ.get(RUNTIME_DIR_ENV_VAR)
+    if override:
+        return override
+
+    runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+    if runtime_dir and os.path.isdir(runtime_dir):
+        return os.path.join(runtime_dir, _RUNTIME_SUBDIR)
+
+    return _FALLBACK_SOCKET_DIR
+
+
+def _default_socket_path(env_var: str, basename: str) -> str:
+    """Resolve one socket path: explicit env var, else the runtime directory."""
+    override = os.environ.get(env_var)
+    if override:
+        return override
+
+    path = os.path.join(socket_dir(), basename)
+    if len(path.encode("utf-8")) > _MAX_UNIX_SOCKET_PATH_LEN:
+        return os.path.join(_FALLBACK_SOCKET_DIR, basename)
+    return path
+
+
+DEFAULT_MULTI_FRAME_SOCKET_PATH = _default_socket_path(
+    "STD_T98_MULTI_FRAME_SOCKET", "std_t98_multi_frame.sock"
 )
-DEFAULT_MULTI_VOICE_SOCKET_PATH = os.environ.get(
-    "STD_T98_MULTI_VOICE_SOCKET",
-    "/tmp/std_t98_multi_voice.sock",
+DEFAULT_MULTI_VOICE_SOCKET_PATH = _default_socket_path(
+    "STD_T98_MULTI_VOICE_SOCKET", "std_t98_multi_voice.sock"
 )
-DEFAULT_MULTI_STATUS_SOCKET_PATH = os.environ.get(
-    "STD_T98_MULTI_STATUS_SOCKET",
-    "/tmp/std_t98_multi_status.sock",
+DEFAULT_MULTI_STATUS_SOCKET_PATH = _default_socket_path(
+    "STD_T98_MULTI_STATUS_SOCKET", "std_t98_multi_status.sock"
 )
-DEFAULT_MULTI_SECRET_REQUEST_SOCKET_PATH = os.environ.get(
-    "STD_T98_MULTI_SECRET_REQUEST_SOCKET",
-    "/tmp/std_t98_multi_secret_request.sock",
+DEFAULT_MULTI_SECRET_REQUEST_SOCKET_PATH = _default_socket_path(
+    "STD_T98_MULTI_SECRET_REQUEST_SOCKET", "std_t98_multi_secret_request.sock"
 )
-DEFAULT_MULTI_SECRET_RESULT_SOCKET_PATH = os.environ.get(
-    "STD_T98_MULTI_SECRET_RESULT_SOCKET",
-    "/tmp/std_t98_multi_secret_result.sock",
+DEFAULT_MULTI_SECRET_RESULT_SOCKET_PATH = _default_socket_path(
+    "STD_T98_MULTI_SECRET_RESULT_SOCKET", "std_t98_multi_secret_result.sock"
 )
 
 
@@ -80,6 +114,10 @@ class UdsSeqpacketServer:
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
         self.listener.setblocking(False)
         self.client = None
+
+        parent = os.path.dirname(self.socket_path)
+        if parent:
+            os.makedirs(parent, mode=0o700, exist_ok=True)
 
         if os.path.exists(self.socket_path):
             os.unlink(self.socket_path)
@@ -192,6 +230,10 @@ class UdsSeqpacketReceiver:
         self.listener.setblocking(False)
         self.clients = {}
         self.poller = select.poll()
+
+        parent = os.path.dirname(self.socket_path)
+        if parent:
+            os.makedirs(parent, mode=0o700, exist_ok=True)
 
         if os.path.exists(self.socket_path):
             os.unlink(self.socket_path)

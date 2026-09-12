@@ -1,8 +1,12 @@
 import errno
+import importlib
+import os
 import socket
 
 import numpy as np
 import pytest
+
+import ipc.transport.uds_seqpacket as uds
 
 from ipc.message_schema import FRAME_FLAG_SYNC_DETECTED, FramePacket
 from ipc.transport.uds_seqpacket import (
@@ -139,3 +143,112 @@ def test_uds_seqpacket_client_try_send_uses_nonblocking_flag():
 
     assert client.try_send(b"payload") is True
     assert calls == [(b"payload", getattr(socket, "MSG_DONTWAIT", 0))]
+
+# --- default socket directory ------------------------------------------------
+#
+# The defaults are module-level constants, so each case reloads the module with
+# the environment it wants instead of trying to mutate them in place.
+
+_SOCKET_ENV_VARS = (
+    "STD_T98_RUNTIME_DIR",
+    "XDG_RUNTIME_DIR",
+    "STD_T98_MULTI_FRAME_SOCKET",
+)
+
+
+def _frame_path_with_env(monkeypatch, **env):
+    for name in _SOCKET_ENV_VARS:
+        monkeypatch.delenv(name, raising=False)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    reloaded = importlib.reload(uds)
+    return reloaded.DEFAULT_MULTI_FRAME_SOCKET_PATH
+
+
+@pytest.fixture(autouse=True)
+def _restore_uds_module():
+    # Leave the module matching the real environment for other tests.
+    yield
+    importlib.reload(uds)
+
+
+def test_sockets_live_under_xdg_runtime_dir(monkeypatch, tmp_path):
+    runtime_dir = tmp_path / "run"
+    runtime_dir.mkdir()
+
+    path = _frame_path_with_env(monkeypatch, XDG_RUNTIME_DIR=str(runtime_dir))
+
+    assert path == str(runtime_dir / "std-t98" / "std_t98_multi_frame.sock")
+
+
+def test_sockets_fall_back_to_tmp_without_xdg_runtime_dir(monkeypatch):
+    path = _frame_path_with_env(monkeypatch)
+
+    assert path == "/tmp/std_t98_multi_frame.sock"
+
+
+def test_unusable_xdg_runtime_dir_falls_back_to_tmp(monkeypatch, tmp_path):
+    path = _frame_path_with_env(
+        monkeypatch, XDG_RUNTIME_DIR=str(tmp_path / "does-not-exist")
+    )
+
+    assert path == "/tmp/std_t98_multi_frame.sock"
+
+
+def test_runtime_dir_override_wins_over_xdg(monkeypatch, tmp_path):
+    runtime_dir = tmp_path / "run"
+    runtime_dir.mkdir()
+    override = tmp_path / "elsewhere"
+
+    path = _frame_path_with_env(
+        monkeypatch,
+        XDG_RUNTIME_DIR=str(runtime_dir),
+        STD_T98_RUNTIME_DIR=str(override),
+    )
+
+    assert path == str(override / "std_t98_multi_frame.sock")
+
+
+def test_per_socket_env_var_wins_over_runtime_dir(monkeypatch, tmp_path):
+    runtime_dir = tmp_path / "run"
+    runtime_dir.mkdir()
+
+    path = _frame_path_with_env(
+        monkeypatch,
+        XDG_RUNTIME_DIR=str(runtime_dir),
+        STD_T98_MULTI_FRAME_SOCKET="/tmp/explicit_frame.sock",
+    )
+
+    assert path == "/tmp/explicit_frame.sock"
+
+
+def test_overlong_runtime_dir_falls_back_to_tmp(monkeypatch, tmp_path):
+    # sun_path is 108 bytes; a deep runtime dir must not produce a path that
+    # only fails later at bind().
+    too_long = "/" + "x" * 120
+
+    path = _frame_path_with_env(monkeypatch, STD_T98_RUNTIME_DIR=too_long)
+
+    assert path == "/tmp/std_t98_multi_frame.sock"
+
+
+def test_server_creates_missing_socket_directory(tmp_path):
+    # The runtime dir has no std-t98 subdirectory until a server binds.
+    socket_path = tmp_path / "std-t98" / "frame.sock"
+    assert not socket_path.parent.exists()
+
+    server = uds.UdsSeqpacketServer(str(socket_path))
+    try:
+        assert socket_path.exists()
+        assert os.stat(socket_path.parent).st_mode & 0o777 == 0o700
+
+        client = uds.UdsSeqpacketClient(str(socket_path), connect_timeout=2.0)
+        try:
+            # send() accepts the pending connection on its first call, so it
+            # can legitimately report False once before the client attaches.
+            assert any(server.send(b"hello") for _ in range(10))
+            assert client.recv() == b"hello"
+        finally:
+            client.close()
+    finally:
+        server.close()

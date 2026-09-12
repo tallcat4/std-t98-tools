@@ -301,10 +301,16 @@ launcher の dashboard には、各チャンネルの RX 状態、protocol / aud
 
 ## IPC 既定値
 
-- frame socket: `/tmp/std_t98_multi_frame.sock`
-- voice socket: `/tmp/std_t98_multi_voice.sock`
-- status socket: `/tmp/std_t98_multi_status.sock`
-- secret request socket: `/tmp/std_t98_multi_secret_request.sock`
-- secret result socket: `/tmp/std_t98_multi_secret_result.sock`
+ソケットは `XDG_RUNTIME_DIR` が設定されていればその下の `std-t98/` に、無ければ `/tmp` に置かれます。
 
-必要なら `STD_T98_MULTI_FRAME_SOCKET`、`STD_T98_MULTI_VOICE_SOCKET`、`STD_T98_MULTI_STATUS_SOCKET`、`STD_T98_MULTI_SECRET_REQUEST_SOCKET`、`STD_T98_MULTI_SECRET_RESULT_SOCKET` で上書きできます。
+- frame socket: `$XDG_RUNTIME_DIR/std-t98/std_t98_multi_frame.sock`
+- voice socket: `$XDG_RUNTIME_DIR/std-t98/std_t98_multi_voice.sock`
+- status socket: `$XDG_RUNTIME_DIR/std-t98/std_t98_multi_status.sock`
+- secret request socket: `$XDG_RUNTIME_DIR/std-t98/std_t98_multi_secret_request.sock`
+- secret result socket: `$XDG_RUNTIME_DIR/std-t98/std_t98_multi_secret_result.sock`
+
+`XDG_RUNTIME_DIR`（通常 `/run/user/$UID`、パーミッション 0700）はユーザ単位で分離され、ログアウト時に自動で片付けられます。`/tmp` は全ユーザ共有かつ誰でも書けるため、同じマシンで複数ユーザが起動するとパスが衝突し、異常終了で残ったソケットも放置されます。ディレクトリは最初に bind したプロセスが 0700 で作成します。
+
+置き場所は `STD_T98_RUNTIME_DIR` でまとめて変更でき、個別のパスは `STD_T98_MULTI_FRAME_SOCKET`、`STD_T98_MULTI_VOICE_SOCKET`、`STD_T98_MULTI_STATUS_SOCKET`、`STD_T98_MULTI_SECRET_REQUEST_SOCKET`、`STD_T98_MULTI_SECRET_RESULT_SOCKET` で上書きできます（個別指定が優先）。
+
+launcher は子プロセスに環境変数をそのまま引き継ぐため、launcher 経由なら全プロセスが同じパスを使います。backend と service を別々に起動する場合は、双方の `XDG_RUNTIME_DIR` が一致していることを確認してください（例: systemd unit や `sudo` 経由だと未設定になり `/tmp` 側にずれます）。
