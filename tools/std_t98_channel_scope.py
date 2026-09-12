@@ -42,6 +42,7 @@ from core.rf.backend_config import (
     derive_rates,
     load_config,
 )
+from core.rf.soapy_source import open_source
 from firdes import make_rx_taps
 
 
@@ -85,38 +86,11 @@ class ChannelScope(gr.top_block, Qt.QWidget):
         post_sync_gain = 5
 
         # ---------------- source ------------------------------------------
-        from gnuradio import soapy
-
-        self.source = soapy.source(
-            sdr_cfg.device_string(), "fc32", 1, "",
-            sdr_cfg.resolved_stream_args(), [""], [""],
-        )
-        if sdr_cfg.antenna:
-            self.source.set_antenna(0, sdr_cfg.antenna)
-        self.source.set_sample_rate(0, sdr_cfg.sample_rate)
-        self.source.set_frequency(0, tuned_freq)
-        bandwidth = sdr_cfg.resolved_bandwidth()
-        if bandwidth:
-            try:
-                self.source.set_bandwidth(0, bandwidth)
-            except Exception:
-                pass
-        try:
-            if sdr_cfg.agc and bool(self.source.has_gain_mode(0)):
-                self.source.set_gain_mode(0, True)
-            else:
-                self.source.set_gain_mode(0, False)
-        except Exception:
-            pass
-        gain_names = []
-        try:
-            gain_names = list(self.source.list_gains(0))
-        except Exception:
-            pass
-        if sdr_cfg.gain_element and sdr_cfg.gain_element in gain_names:
-            self.source.set_gain(0, sdr_cfg.gain_element, sdr_cfg.tuner_gain)
-        else:
-            self.source.set_gain(0, sdr_cfg.tuner_gain)
+        # Same helper the backend uses, so the device is configured
+        # identically -- rate validation and snapping, driver-aware stream args
+        # and bandwidth, antenna checking, and the gain fallbacks.
+        self._source = open_source(sdr_cfg)
+        self.source = self._source.source
 
         # ---------------- channelisation ----------------------------------
         self.rotator = blocks.rotator_cc(0.0)

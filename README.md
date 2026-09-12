@@ -291,8 +291,8 @@ python3 std_t98_multi_protocol_service.py
 数値だけで切り分けられないときは、GUI で受信チェーンの各段を直接見られます。
 
 ```bash
-python3 tools/std_t98_channel_scope.py --driver uhd --antenna "TX/RX" \
-    --gain 10 --gain-element PGA --no-agc --channel 0 --no-squelch
+python3 tools/std_t98_channel_scope.py --driver uhd --sample-rate 2000000 \
+    --antenna "TX/RX" --gain 10 --gain-element PGA --no-agc --channel 0 --no-squelch
 ```
 
 `--channel` は内部インデックス（0〜29）で、**0 が登録局 ch1 = 351.20000 MHz** です。ウィンドウ表題と標準出力に両方の番号と実周波数を出します。
@@ -306,7 +306,7 @@ python3 tools/std_t98_channel_scope.py --driver uhd --antenna "TX/RX" \
 | アイパターン | 判定できる開口があるか |
 | 復調シンボル | シンボル同期が引き込んだか |
 
-DSP はバックエンドと同一の設定（`fsk_dev` 315、RRC ロールオフ 0.2、Gardner TED など）を使うので、画面に出るものがバックエンドの見ているものです。
+DSP はバックエンドと同一の設定（`fsk_dev` 315、RRC ロールオフ 0.2、Gardner TED など）を使い、SDR を開く処理も `core/rf/soapy_source.py` を共有します。レート検証もアンテナ確認も帯域幅もバックエンドと同じなので、**画面に出るものがバックエンドの見ているもの**です。
 
 `--no-squelch` はスケルチ（-25dB）を迂回します。弱い信号だとスケルチで消えてアイパターンが平坦になるため、切り分け中は付けておくのが安全です。
 

@@ -16,13 +16,13 @@ from gnuradio import gr
 from gnuradio.fft import window
 import sys
 import signal
-from gnuradio import soapy
 from gnuradio.filter import pfb
 import std_t98_multi_sync as sync_word_corr  # embedded python block
 import threading
 
 from firdes import make_rx_taps
 from core.rf.backend_config import BackendConfig, derive_rates
+from core.rf.soapy_source import open_source
 
 class test3(gr.top_block):
 
@@ -123,102 +123,14 @@ class test3(gr.top_block):
         ##################################################
         # Blocks
         ##################################################
-        self.soapy_source_0 = None
-        dev = sdr_cfg.device_string()
-        stream_args = sdr_cfg.resolved_stream_args()
-        tune_args = ['']
-        settings = ['']
-        gain_element = sdr_cfg.gain_element
+        self._source = open_source(sdr_cfg)
+        self.soapy_source_0 = self._source.source
 
-        def _set_soapy_source_0_gain_mode(channel, agc):
-            # Not every SoapySDR device exposes an automatic gain mode.
-            if not self._soapy_source_0_has_agc:
-                return
-            self.soapy_source_0.set_gain_mode(channel, agc)
-            if not agc:
-                self._apply_manual_gain(channel, self._soapy_source_0_gain_value)
-        self.set_soapy_source_0_gain_mode = _set_soapy_source_0_gain_mode
-
-        def _apply_manual_gain(channel, gain):
-            # Prefer a named gain element when the device (and config) name one;
-            # fall back to the overall gain otherwise.
-            if gain_element and gain_element in self._soapy_source_0_gain_names:
-                self.soapy_source_0.set_gain(channel, gain_element, gain)
-            else:
-                self.soapy_source_0.set_gain(channel, gain)
-        self._apply_manual_gain = _apply_manual_gain
-
-        def _set_soapy_source_0_gain(channel, gain):
-            self._soapy_source_0_gain_value = gain
-            if self._soapy_source_0_has_agc and self.soapy_source_0.get_gain_mode(channel):
-                return
-            self._apply_manual_gain(channel, gain)
-        self.set_soapy_source_0_gain = _set_soapy_source_0_gain
-
-        def _set_soapy_source_0_bias(bias):
-            if 'biastee' in self._soapy_source_0_setting_keys:
-                self.soapy_source_0.write_setting('biastee', bias)
-        self.set_soapy_source_0_bias = _set_soapy_source_0_bias
-
-        self.soapy_source_0 = soapy.source(dev, "fc32", 1, '', stream_args, tune_args, settings)
-        self._soapy_source_0_setting_keys = [a.key for a in self.soapy_source_0.get_setting_info()]
-        try:
-            self._soapy_source_0_gain_names = list(self.soapy_source_0.list_gains(0))
-        except Exception:
-            self._soapy_source_0_gain_names = []
-        try:
-            self._soapy_source_0_has_agc = bool(self.soapy_source_0.has_gain_mode(0))
-        except Exception:
-            self._soapy_source_0_has_agc = True
-
-        # Only touch the antenna when asked: single-input devices have nothing
-        # to select, and the driver's own default is right for most others.
-        antenna = sdr_cfg.antenna
-        if antenna:
-            try:
-                available = list(self.soapy_source_0.list_antennas(0))
-            except Exception:
-                available = []
-            if available and antenna not in available:
-                raise ValueError(
-                    f"Antenna {antenna!r} is not available on this device. "
-                    f"Choose one of: {available}"
-                )
-            self.soapy_source_0.set_antenna(0, antenna)
-
-        device_samp_rate = self._resolve_sample_rate(rf_samp_rate, config)
-        self.soapy_source_0.set_sample_rate(0, device_samp_rate)
-        # Some drivers round instead of refusing. The channelizer geometry is
-        # derived from the requested rate, so a silent substitution would
-        # mistune every channel.
-        actual_samp_rate = self.soapy_source_0.get_sample_rate(0)
-        if abs(actual_samp_rate - rf_samp_rate) > max(1.0, rf_samp_rate * 1e-6):
-            raise ValueError(
-                f"Device serves {actual_samp_rate:.0f} Hz, not the requested "
-                f"{rf_samp_rate:.0f} Hz. Re-run with --sample-rate "
-                f"{actual_samp_rate:.0f} so the channelizer matches, or pick a "
-                "rate the device supports exactly."
-            )
-
-        bandwidth = sdr_cfg.resolved_bandwidth()
-        if bandwidth:
-            try:
-                self.soapy_source_0.set_bandwidth(0, bandwidth)
-            except Exception:
-                # Not every device exposes a tunable analog filter.
-                pass
-        self.soapy_source_0.set_frequency(0, (rf_freq + freq_offset + freq_err_offset))
-        if sdr_freq_corr:
-            try:
-                self.soapy_source_0.set_frequency_correction(0, sdr_freq_corr)
-            except Exception:
-                pass
-        self.set_soapy_source_0_bias(bool(sdr_biastee_enabled))
-        self._soapy_source_0_gain_value = sdr_tuner_gain
-        self.set_soapy_source_0_gain_mode(0, bool(sdr_agc_enabled))
-        self.set_soapy_source_0_gain(0, sdr_tuner_gain)
-
-        # Backwards-compatible aliases (older references used the rtlsdr names).
+        # Names kept for anything that reached into the flowgraph before the
+        # device handling moved into core.rf.soapy_source.
+        self.set_soapy_source_0_gain_mode = self._source.set_gain_mode
+        self.set_soapy_source_0_gain = self._source.set_gain
+        self.set_soapy_source_0_bias = self._source.set_bias
         self.soapy_rtlsdr_source_0 = self.soapy_source_0
 
         self.blocks_throttle_1 = blocks.throttle(gr.sizeof_gr_complex*1, rf_samp_rate, True, throttle_max_items_per_block)
@@ -318,46 +230,6 @@ class test3(gr.top_block):
             self.null_sinks.append(ns)
             self.connect((self.pfb_channelizer_ccf_0, ch), (ns, 0))
 
-    def _resolve_sample_rate(self, requested, config):
-        """Return the rate to actually ask the device for.
-
-        Devices advertise exact values such as 8e6/7 = 1230769.230769 and
-        refuse anything else, so a user typing the rounded figure is snapped
-        onto the advertised one rather than rejected. If nothing matches, the
-        error names the nearest supported rates -- the raw device list runs to
-        hundreds of entries, which is no answer to "what should I use?".
-        """
-        from core.rf.backend_config import nearest_sample_rates
-
-        try:
-            ranges = self.soapy_source_0.get_sample_rate_range(0)
-        except Exception:
-            return requested  # Driver does not advertise its rates.
-
-        if not ranges:
-            return requested
-
-        tolerance = max(1.0, requested * 1e-6)
-        discrete = []
-        for entry in ranges:
-            low, high = entry.minimum(), entry.maximum()
-            if low == high:
-                discrete.append(low)
-                if abs(requested - low) <= tolerance:
-                    return low
-            elif low <= requested <= high:
-                return requested
-
-        if not discrete:
-            return requested  # Continuous ranges only; let Soapy complain.
-
-        suggestions = nearest_sample_rates(discrete, requested)
-        hint = "Nearest rates this device supports: " + ", ".join(
-            f"{rate:.0f}" for rate in suggestions
-        )
-        raise ValueError(
-            f"This device cannot sample at {requested:.0f} Hz. {hint}"
-        )
 
 def _parse_args(argv=None):
     import argparse
