@@ -189,6 +189,13 @@ class ConfigLoadingTest(unittest.TestCase):
         # RTL-SDR has one input; never send a port selection it cannot honour.
         self.assertIsNone(SdrConfig().antenna)
 
+    def test_cli_sets_freq_err_offset(self):
+        # Per-device calibration: the default is measured on an RTL-SDR and is
+        # meaningless on any other radio.
+        args = self._parse(["--driver", "uhd", "--freq-err-offset", "1030"])
+        config = apply_cli_overrides(BackendConfig(), args)
+        self.assertEqual(config.sdr.freq_err_offset, 1030.0)
+
     def test_cli_sets_bandwidth(self):
         args = self._parse(["--driver", "uhd", "--bandwidth", "3000000"])
         config = apply_cli_overrides(BackendConfig(), args)

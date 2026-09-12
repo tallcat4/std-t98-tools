@@ -341,6 +341,12 @@ def add_config_arguments(parser) -> None:
         "Omit to leave the driver's own default. Devices with a single input "
         "ignore this.",
     )
+    parser.add_argument(
+        "--freq-err-offset", type=float,
+        help="Per-device frequency error correction in Hz, added to the tuned "
+        "frequency. This is calibration for one specific radio, so it must be "
+        "re-measured when the SDR changes.",
+    )
     parser.add_argument("--freq-correction", type=float, help="Frequency correction in ppm.")
     parser.add_argument("--pfb-channels", type=int, help="Number of PFB channels (>= num_channels).")
 
@@ -360,6 +366,7 @@ def apply_cli_overrides(config: BackendConfig, args) -> BackendConfig:
         ("bandwidth", "bandwidth"),
         ("agc", "agc"),
         ("bias_tee", "bias_tee"),
+        ("freq_err_offset", "freq_err_offset"),
         ("freq_correction", "freq_correction"),
     ):
         value = getattr(args, attr, None)
