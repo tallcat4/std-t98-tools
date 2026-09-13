@@ -21,7 +21,9 @@ from app.profile_store import (
     list_profiles,
     profiles_dir,
     read_freq_err_offset,
+    read_squelch_threshold,
     write_freq_err_offset,
+    write_squelch_threshold,
 )
 from core.pipeline.multi_stack_dashboard import (
     ChannelView,
@@ -30,10 +32,12 @@ from core.pipeline.multi_stack_dashboard import (
     _format_secret_cache,
 )
 from core.pipeline.stack_supervisor import StackSupervisor
-from core.rf.backend_config import CONFIG_ENV_VAR
+from core.rf.backend_config import CONFIG_ENV_VAR, DemodConfig
 
 CHANNEL_COUNT = 30
 POLL_INTERVAL_MS = 100
+SQUELCH_RANGE_DB = (-100, 0)
+DEFAULT_SQUELCH_THRESHOLD = DemodConfig().squelch_threshold
 
 _PROCESS_STATE_COLOURS = {
     "RUNNING": "#2e7d32",
@@ -215,6 +219,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._services_only = QtWidgets.QCheckBox("Services only")
         self._services_only.setToolTip("Assume the RF backend is started separately.")
         self._services_only.toggled.connect(self._update_preview)
+        self._services_only.toggled.connect(self._refresh_squelch_controls_enabled)
         self._show_debug = QtWidgets.QCheckBox("Debug metrics")
 
         self._settings_toggle = QtWidgets.QToolButton()
@@ -232,6 +237,26 @@ class MainWindow(QtWidgets.QMainWindow):
         controls.addStretch(1)
         controls.addWidget(self._settings_toggle)
         root.addLayout(controls)
+
+        # Squelch row: a live control, so it stays outside the collapsible
+        # Settings panel below and remains usable while the stack is running.
+        squelch_row = QtWidgets.QHBoxLayout()
+        squelch_row.addWidget(QtWidgets.QLabel("Squelch:"))
+        self._squelch_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self._squelch_slider.setRange(*SQUELCH_RANGE_DB)
+        self._squelch_slider.setValue(int(round(DEFAULT_SQUELCH_THRESHOLD)))
+        self._squelch_slider.valueChanged.connect(self._on_squelch_changed)
+        squelch_row.addWidget(self._squelch_slider, 1)
+        self._squelch_value_label = QtWidgets.QLabel(f"{int(round(DEFAULT_SQUELCH_THRESHOLD))} dB")
+        self._squelch_value_label.setMinimumWidth(48)
+        squelch_row.addWidget(self._squelch_value_label)
+        self._squelch_save_button = QtWidgets.QPushButton("Save")
+        self._squelch_save_button.setToolTip(
+            "Write the current value into the selected profile's [demod].squelch_threshold."
+        )
+        self._squelch_save_button.clicked.connect(self._save_squelch_to_profile)
+        squelch_row.addWidget(self._squelch_save_button)
+        root.addLayout(squelch_row)
 
         # Collapsible settings panel: config picker, resolved preview, extra
         # backend args. Not needed while receiving, so it folds away on Start.
@@ -284,7 +309,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         backend_row = QtWidgets.QHBoxLayout()
         self._backend_args = QtWidgets.QLineEdit()
-        self._backend_args.setPlaceholderText("Extra backend args, e.g. --replay capture.cf32 --squelch -40")
+        self._backend_args.setPlaceholderText("Extra backend args, e.g. --replay capture.cf32 (squelch has its own slider above)")
         backend_row.addWidget(QtWidgets.QLabel("Backend:"))
         backend_row.addWidget(self._backend_args, 1)
         panel.addLayout(backend_row)
@@ -373,6 +398,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._open_profile_button.setEnabled(not running)
         self._detect_button.setEnabled(not running)
         self._refresh_freq_field_enabled()
+        self._refresh_squelch_controls_enabled()
 
     # --- settings panel ----------------------------------------------------
     def _on_settings_toggled(self, checked):
@@ -432,7 +458,20 @@ class MainWindow(QtWidgets.QMainWindow):
         # Programmatic setText fires textChanged (-> preview), not editingFinished,
         # so mirroring the file into the field does not write it straight back.
         self._freq_err.setText("" if offset is None else f"{offset:g}")
+
+        squelch = read_squelch_threshold(path) if path else None
+        # blockSignals so seeding the slider from the file does not push a
+        # live control message (there is nothing running to push to anyway,
+        # since the profile combo is disabled while the stack is running).
+        self._squelch_slider.blockSignals(True)
+        self._squelch_slider.setValue(
+            int(round(squelch if squelch is not None else DEFAULT_SQUELCH_THRESHOLD))
+        )
+        self._squelch_slider.blockSignals(False)
+        self._squelch_value_label.setText(f"{self._squelch_slider.value()} dB")
+
         self._refresh_freq_field_enabled()
+        self._refresh_squelch_controls_enabled()
         self._update_preview()
 
     def _refresh_freq_field_enabled(self):
@@ -442,6 +481,34 @@ class MainWindow(QtWidgets.QMainWindow):
         self._freq_err.setToolTip(
             "" if has_profile else "Create or open a profile to save calibration."
         )
+
+    def _refresh_squelch_controls_enabled(self):
+        # The slider stays live (and enabled) while running -- that is the
+        # whole point -- but it needs a managed backend to have any effect.
+        manages_backend = not self._services_only.isChecked()
+        self._squelch_slider.setEnabled(manages_backend)
+        has_profile = self._current_profile_path() is not None
+        self._squelch_save_button.setEnabled(manages_backend and has_profile)
+        self._squelch_save_button.setToolTip(
+            "Write the current value into the selected profile's [demod].squelch_threshold."
+            if has_profile else "Create or open a profile to save the squelch value."
+        )
+
+    def _on_squelch_changed(self, value):
+        self._squelch_value_label.setText(f"{value} dB")
+        if self._running and self.supervisor is not None:
+            self.supervisor.set_squelch(float(value))
+
+    def _save_squelch_to_profile(self):
+        path = self._current_profile_path()
+        if path is None:
+            return
+        try:
+            write_squelch_threshold(path, float(self._squelch_slider.value()))
+        except OSError as exc:
+            QtWidgets.QMessageBox.warning(self, "Save squelch", f"Could not write to profile:\n{exc}")
+            return
+        self._update_preview()
 
     def _new_profile_from_device(self):
         presets = list_device_presets(self.repo_root / "devices")
@@ -601,6 +668,11 @@ class MainWindow(QtWidgets.QMainWindow):
                 )
                 return
 
+            # The slider is a plain CLI override (not written to the profile
+            # unless Save is clicked), so Start always uses exactly what it
+            # shows, whether or not that has been persisted yet.
+            squelch_args = ["--squelch", str(self._squelch_slider.value())]
+
             path = self._current_profile_path()
             if path is not None:
                 if not os.path.exists(os.path.expanduser(path)):
@@ -611,9 +683,10 @@ class MainWindow(QtWidgets.QMainWindow):
                 # The profile file is the source of truth: fold the field into it,
                 # then the backend reads the calibration from --config.
                 self._save_calibration_to_profile()
-                backend_args = ["--config", str(path), *extra_args]
+                backend_args = ["--config", str(path), *squelch_args, *extra_args]
                 self._settings.setValue("profile_path", str(path))
             else:
+                backend_args = [*squelch_args, *extra_args]
                 self._settings.setValue("profile_path", "")
 
         supervisor = StackSupervisor(

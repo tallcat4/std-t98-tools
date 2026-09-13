@@ -78,6 +78,78 @@ def test_settings_panel_toggles(qapp):
     assert window._settings_panel.isVisibleTo(window) is True
     window._settings_toggle.setChecked(False)
     assert window._settings_panel.isVisibleTo(window) is False
+
+
+def test_squelch_slider_seeds_from_profile_and_defaults_without_one(qapp, tmp_path, monkeypatch):
+    from app.main_window import DEFAULT_SQUELCH_THRESHOLD
+    from app.profile_store import create_profile
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    template = tmp_path / "tmpl.toml"
+    template.write_text('[sdr]\ndriver = "uhd"\n[demod]\nsquelch_threshold = -60\n')
+    profile = create_profile(template, "unit1")
+
+    window = MainWindow()
+    window._reload_profiles(select_path=None)
+    assert window._squelch_slider.value() == int(round(DEFAULT_SQUELCH_THRESHOLD))
+
+    window._reload_profiles(select_path=str(profile))
+    assert window._squelch_slider.value() == -60
+    assert window._squelch_value_label.text() == "-60 dB"
+
+
+def test_squelch_save_button_writes_into_profile_and_needs_a_profile(qapp, tmp_path, monkeypatch):
+    from app.profile_store import create_profile, read_squelch_threshold
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    template = tmp_path / "tmpl.toml"
+    template.write_text('[sdr]\ndriver = "uhd"\n[demod]\nsquelch_threshold = -60\n')
+    profile = create_profile(template, "unit1")
+
+    window = MainWindow()
+    window._reload_profiles(select_path=None)
+    assert not window._squelch_save_button.isEnabled()
+
+    window._reload_profiles(select_path=str(profile))
+    assert window._squelch_save_button.isEnabled()
+    window._squelch_slider.setValue(-35)
+    window._save_squelch_to_profile()
+    assert read_squelch_threshold(profile) == -35
+
+
+def test_squelch_controls_disabled_in_services_only_mode(qapp, tmp_path, monkeypatch):
+    from app.profile_store import create_profile
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    template = tmp_path / "tmpl.toml"
+    template.write_text('[sdr]\ndriver = "uhd"\n')
+    profile = create_profile(template, "unit1")
+
+    window = MainWindow()
+    window._reload_profiles(select_path=str(profile))
+    assert window._squelch_slider.isEnabled()
+
+    window._services_only.setChecked(True)
+    assert not window._squelch_slider.isEnabled()
+    assert not window._squelch_save_button.isEnabled()
+
+
+def test_squelch_slider_stays_enabled_while_running(qapp, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    window = MainWindow()
+    window._set_running(True)
+    assert window._squelch_slider.isEnabled()
+
+    calls = []
+
+    class FakeSupervisor:
+        def set_squelch(self, value):
+            calls.append(value)
+            return True
+
+    window.supervisor = FakeSupervisor()
+    window._squelch_slider.setValue(-55)
+    assert calls == [-55.0]
     window._settings_toggle.setChecked(True)
     assert window._settings_panel.isVisibleTo(window) is True
 

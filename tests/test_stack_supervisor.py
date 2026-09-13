@@ -3,7 +3,7 @@ from pathlib import Path
 import core.pipeline.stack_supervisor as supervisor_mod
 from core.pipeline.stack_supervisor import StackSupervisor, StatusAggregator
 from core.pipeline.multi_stack_dashboard import ProcessView
-from ipc.message_schema import STATUS_SOURCE_PROTOCOL, STATUS_SOURCE_AUDIO, StatusPacket
+from ipc.message_schema import ControlSquelchPacket, STATUS_SOURCE_PROTOCOL, STATUS_SOURCE_AUDIO, StatusPacket
 
 
 def _fake_resolve(monkeypatch, service_python="/fake/env/python", backend_python="/fake/sys/python"):
@@ -14,6 +14,7 @@ def _fake_resolve(monkeypatch, service_python="/fake/env/python", backend_python
 
     monkeypatch.setattr(supervisor_mod, "_resolve_python", resolver)
     monkeypatch.setattr(supervisor_mod, "resolve_status_socket_path", lambda channel_count: "/tmp/status.sock")
+    monkeypatch.setattr(supervisor_mod, "resolve_control_socket_path", lambda: "/tmp/control.sock")
 
 
 def test_resolve_builds_specs_and_process_views(monkeypatch):
@@ -24,8 +25,10 @@ def test_resolve_builds_specs_and_process_views(monkeypatch):
     assert [s.name for s in specs] == ["protocol", "secret", "audio", "backend"]
     assert [v.name for v in sup.process_views] == ["protocol", "secret", "audio", "backend"]
     assert specs[0].args == ("--headless", "--status-socket", "/tmp/status.sock")
+    assert specs[3].args == ("--control-socket", "/tmp/control.sock")
     assert str(specs[3].python_executable) == "/fake/sys/python"
     assert sup.mode_label == "full-stack"
+    assert sup.control_socket_path == "/tmp/control.sock"
 
 
 def test_resolve_services_only_skips_backend(monkeypatch):
@@ -36,6 +39,8 @@ def test_resolve_services_only_skips_backend(monkeypatch):
     assert [s.name for s in specs] == ["protocol", "secret", "audio"]
     assert sup.backend_python is None
     assert sup.mode_label == "services-only"
+    # No managed backend, so there is nothing to send live control to.
+    assert sup.control_socket_path is None
 
 
 def test_dry_run_lines_include_backend_args(monkeypatch):
@@ -87,3 +92,23 @@ def test_status_aggregator_folds_channel_and_service_state():
     assert aggregator.apply_packet(audio_packet) is True
     assert aggregator.channels[5].audio_status == "Playing"
     assert aggregator.channels[5].rx_status == "OPEN"
+
+
+def test_set_squelch_without_control_server_returns_false():
+    sup = StackSupervisor(repo_root=Path("/tmp/std-t98-tools"))
+    assert sup.set_squelch(-40.0) is False
+
+
+def test_set_squelch_sends_encoded_packet_to_control_server():
+    sent = []
+
+    class FakeControlServer:
+        def send(self, payload):
+            sent.append(payload)
+            return True
+
+    sup = StackSupervisor(repo_root=Path("/tmp/std-t98-tools"))
+    sup._control_server = FakeControlServer()
+
+    assert sup.set_squelch(-42.5) is True
+    assert sent == [ControlSquelchPacket(threshold_db=-42.5).encode()]

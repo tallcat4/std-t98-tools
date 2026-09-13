@@ -10,6 +10,7 @@ import ipc.transport.uds_seqpacket as uds
 
 from ipc.message_schema import FRAME_FLAG_SYNC_DETECTED, FramePacket
 from ipc.transport.uds_seqpacket import (
+    DEFAULT_MULTI_CONTROL_SOCKET_PATH,
     DEFAULT_MULTI_FRAME_SOCKET_PATH,
     DEFAULT_MULTI_SECRET_REQUEST_SOCKET_PATH,
     DEFAULT_MULTI_SECRET_RESULT_SOCKET_PATH,
@@ -18,6 +19,7 @@ from ipc.transport.uds_seqpacket import (
     UdsSeqpacketClient,
     UdsSeqpacketReceiver,
     UdsSeqpacketServer,
+    resolve_control_socket_path,
     resolve_frame_socket_path,
     resolve_secret_request_socket_path,
     resolve_secret_result_socket_path,
@@ -42,6 +44,9 @@ def test_socket_path_resolvers_use_multi_defaults_and_custom_overrides():
     assert resolve_secret_result_socket_path(channel_count=1) == DEFAULT_MULTI_SECRET_RESULT_SOCKET_PATH
     assert resolve_secret_result_socket_path(channel_count=30) == DEFAULT_MULTI_SECRET_RESULT_SOCKET_PATH
     assert resolve_secret_result_socket_path(socket_path="/tmp/custom_secret_result.sock") == "/tmp/custom_secret_result.sock"
+    assert resolve_control_socket_path(channel_count=1) == DEFAULT_MULTI_CONTROL_SOCKET_PATH
+    assert resolve_control_socket_path(channel_count=30) == DEFAULT_MULTI_CONTROL_SOCKET_PATH
+    assert resolve_control_socket_path(socket_path="/tmp/custom_control.sock") == "/tmp/custom_control.sock"
 
 
 def test_uds_seqpacket_roundtrip(tmp_path):

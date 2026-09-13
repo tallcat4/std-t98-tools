@@ -25,9 +25,15 @@ from ipc.message_schema import (
     STATUS_SOURCE_PROTOCOL,
     STATUS_SOURCE_RF,
     STATUS_SOURCE_SECRET,
+    ControlSquelchPacket,
     StatusPacket,
 )
-from ipc.transport.uds_seqpacket import UdsSeqpacketReceiver, resolve_status_socket_path
+from ipc.transport.uds_seqpacket import (
+    UdsSeqpacketReceiver,
+    UdsSeqpacketServer,
+    resolve_control_socket_path,
+    resolve_status_socket_path,
+)
 
 
 BACKEND_IMPORT_CHECKS = ("from gnuradio import gr", "from gnuradio import soapy")
@@ -135,7 +141,7 @@ def _resolve_python(override, candidate_paths, import_checks, role_name):
     )
 
 
-def build_process_specs(repo_root, service_python, status_socket_path=None, backend_python=None, include_backend=True, backend_args=()):
+def build_process_specs(repo_root, service_python, status_socket_path=None, backend_python=None, include_backend=True, backend_args=(), control_socket_path=None):
     service_python = Path(service_python)
     process_specs = [
         ProcessSpec(
@@ -161,10 +167,11 @@ def build_process_specs(repo_root, service_python, status_socket_path=None, back
     if include_backend:
         if backend_python is None:
             raise ValueError("backend_python is required when include_backend is True")
+        control_args = ("--control-socket", control_socket_path) if control_socket_path else ()
         process_specs.append(ProcessSpec(
             "backend", Path(backend_python),
             repo_root / "std_t98_30ch_multi_rf_backend.py",
-            args=tuple(backend_args),
+            args=(*backend_args, *control_args),
         ))
 
     return process_specs
@@ -367,10 +374,12 @@ class StackSupervisor:
         self.service_python: Path | None = None
         self.backend_python: Path | None = None
         self.status_socket_path: str | None = None
+        self.control_socket_path: str | None = None
         self.process_specs: list[ProcessSpec] = []
 
         self.aggregator = StatusAggregator()
         self._status_receiver = None
+        self._control_server = None
         self._processes: list[tuple[str, subprocess.Popen]] = []
         self._process_logs: dict[str, object] = {}
         self.exit_code = 0
@@ -422,6 +431,9 @@ class StackSupervisor:
             )
 
         self.status_socket_path = resolve_status_socket_path(channel_count=self.channel_count)
+        self.control_socket_path = (
+            None if self.services_only else resolve_control_socket_path()
+        )
 
         self.process_specs = build_process_specs(
             repo_root=self.repo_root,
@@ -430,6 +442,7 @@ class StackSupervisor:
             backend_python=self.backend_python,
             include_backend=not self.services_only,
             backend_args=self.backend_args,
+            control_socket_path=self.control_socket_path,
         )
 
         self.aggregator.set_process_views([
@@ -461,6 +474,8 @@ class StackSupervisor:
             self.resolve()
 
         self._status_receiver = UdsSeqpacketReceiver(self.status_socket_path)
+        if self.control_socket_path:
+            self._control_server = UdsSeqpacketServer(self.control_socket_path)
 
         for spec in self.process_specs:
             process, log_file = _spawn_process(
@@ -511,10 +526,24 @@ class StackSupervisor:
 
         return changed
 
+    def set_squelch(self, threshold_db: float) -> bool:
+        """Push a live squelch threshold to the running backend, if any.
+
+        Returns False harmlessly if there is no managed backend or it has not
+        connected to the control socket yet (e.g. services-only mode, or the
+        stack was just started).
+        """
+        if self._control_server is None:
+            return False
+        return self._control_server.send(ControlSquelchPacket(threshold_db=threshold_db).encode())
+
     def stop(self):
         if self._status_receiver is not None:
             self._status_receiver.close()
             self._status_receiver = None
+        if self._control_server is not None:
+            self._control_server.close()
+            self._control_server = None
         _terminate_processes([process for _, process in self._processes])
         self._processes = []
         self._started = False

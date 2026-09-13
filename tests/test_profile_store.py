@@ -6,8 +6,10 @@ from app.profile_store import (
     list_profiles,
     profiles_dir,
     read_freq_err_offset,
+    read_squelch_threshold,
     set_toml_scalar,
     write_freq_err_offset,
+    write_squelch_threshold,
 )
 
 
@@ -65,6 +67,21 @@ def test_write_and_read_roundtrip_stays_loadable(tmp_path):
     # Clearing removes it again.
     write_freq_err_offset(profile, None)
     assert read_freq_err_offset(profile) is None
+
+
+def test_squelch_threshold_write_and_read_roundtrip(tmp_path):
+    profile = tmp_path / "b210.toml"
+    profile.write_text('# USRP B210\n[sdr]\ndriver = "uhd"\n[demod]\nsquelch_threshold = -40\n')
+    assert read_squelch_threshold(profile) == -40
+
+    write_squelch_threshold(profile, -60)
+    assert read_squelch_threshold(profile) == -60
+    # The result must still be a valid, resolvable backend config.
+    result = preview_config(str(profile))
+    assert result.ok is True
+
+    write_squelch_threshold(profile, None)
+    assert read_squelch_threshold(profile) is None
 
 
 def test_create_profile_copies_template_and_lists(tmp_path):

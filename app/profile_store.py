@@ -70,6 +70,19 @@ def read_freq_err_offset(profile_path):
     return value if isinstance(value, (int, float)) else None
 
 
+def read_squelch_threshold(profile_path):
+    """The profile's [demod].squelch_threshold, or None if unset/unreadable."""
+    if tomllib is None:  # pragma: no cover
+        return None
+    try:
+        with open(profile_path, "rb") as handle:
+            data = tomllib.load(handle)
+    except (OSError, ValueError):
+        return None
+    value = data.get("demod", {}).get("squelch_threshold")
+    return value if isinstance(value, (int, float)) else None
+
+
 def _format_scalar(value) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -133,3 +146,10 @@ def write_freq_err_offset(profile_path, value) -> None:
     path = Path(profile_path)
     text = path.read_text(encoding="utf-8")
     path.write_text(set_toml_scalar(text, "sdr", "freq_err_offset", value), encoding="utf-8")
+
+
+def write_squelch_threshold(profile_path, value) -> None:
+    """Write (or clear, if value is None) [demod].squelch_threshold in the profile."""
+    path = Path(profile_path)
+    text = path.read_text(encoding="utf-8")
+    path.write_text(set_toml_scalar(text, "demod", "squelch_threshold", value), encoding="utf-8")

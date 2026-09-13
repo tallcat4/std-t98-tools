@@ -2,6 +2,7 @@ import pytest
 import numpy as np
 
 from ipc.message_schema import (
+    ControlSquelchPacket,
     FRAME_FLAG_SYNC_DETECTED,
     FramePacket,
     SECRET_BURST_BYTES_AMBE_2450,
@@ -15,6 +16,21 @@ from ipc.message_schema import (
     VOICE_FORMAT_RAW_3600,
     VoiceBurstPacket,
 )
+
+
+def test_control_squelch_packet_roundtrip():
+    packet = ControlSquelchPacket(threshold_db=-42.5)
+
+    decoded = ControlSquelchPacket.decode(packet.encode())
+
+    assert decoded.threshold_db == pytest.approx(-42.5)
+
+
+def test_control_squelch_packet_rejects_wrong_type():
+    # A status packet header happens to be a different, longer struct, so
+    # size mismatch is what actually gets hit -- also worth asserting on.
+    with pytest.raises(ValueError):
+        ControlSquelchPacket.decode(b"\x00" * 4)
 
 
 def test_frame_packet_roundtrip():

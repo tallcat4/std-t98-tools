@@ -81,6 +81,9 @@ DEFAULT_MULTI_SECRET_REQUEST_SOCKET_PATH = _default_socket_path(
 DEFAULT_MULTI_SECRET_RESULT_SOCKET_PATH = _default_socket_path(
     "STD_T98_MULTI_SECRET_RESULT_SOCKET", "std_t98_multi_secret_result.sock"
 )
+DEFAULT_MULTI_CONTROL_SOCKET_PATH = _default_socket_path(
+    "STD_T98_MULTI_CONTROL_SOCKET", "std_t98_multi_control.sock"
+)
 
 
 def resolve_frame_socket_path(channel_count=1, socket_path=None):
@@ -106,6 +109,11 @@ def resolve_secret_request_socket_path(channel_count=1, socket_path=None):
 def resolve_secret_result_socket_path(channel_count=1, socket_path=None):
     del channel_count
     return socket_path or DEFAULT_MULTI_SECRET_RESULT_SOCKET_PATH
+
+
+def resolve_control_socket_path(channel_count=1, socket_path=None):
+    del channel_count
+    return socket_path or DEFAULT_MULTI_CONTROL_SOCKET_PATH
 
 
 class UdsSeqpacketServer:

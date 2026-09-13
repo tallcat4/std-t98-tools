@@ -11,6 +11,7 @@ MSG_TYPE_VOICE_BURST = 2
 MSG_TYPE_STATUS = 3
 MSG_TYPE_SECRET_CRACK_REQUEST = 4
 MSG_TYPE_SECRET_CRACK_RESULT = 5
+MSG_TYPE_CONTROL_SQUELCH = 6
 
 FRAME_FLAG_SYNC_DETECTED = 1 << 0
 FRAME_FLAG_CLIPPED = 1 << 1
@@ -38,6 +39,7 @@ VOICE_HEADER = struct.Struct("<HHIHBHIBB")
 STATUS_HEADER = struct.Struct("<HHIQHHI")
 SECRET_REQUEST_HEADER = struct.Struct("<HHIHHHBB")
 SECRET_RESULT_HEADER = struct.Struct("<HHIHHHBB")
+CONTROL_SQUELCH_HEADER = struct.Struct("<HHf")
 
 SECRET_BURST_BYTES_AMBE_2450 = VOICE_BURST_BLOCK_BYTES_AMBE_2450 * 4
 
@@ -319,3 +321,35 @@ class SecretCrackResultPacket:
             resolved_key=resolved_key,
             result_source=result_source,
         )
+
+
+@dataclass(frozen=True)
+class ControlSquelchPacket:
+    """GUI -> backend: set the per-channel squelch threshold live.
+
+    Sent over the control socket (see ipc.transport.uds_seqpacket), the
+    reverse direction of the status socket, so the backend can be re-tuned
+    without restarting the flowgraph.
+    """
+
+    threshold_db: float
+
+    def encode(self) -> bytes:
+        return CONTROL_SQUELCH_HEADER.pack(
+            MESSAGE_VERSION,
+            MSG_TYPE_CONTROL_SQUELCH,
+            self.threshold_db,
+        )
+
+    @classmethod
+    def decode(cls, payload: bytes):
+        if len(payload) != CONTROL_SQUELCH_HEADER.size:
+            raise ValueError("Control squelch packet size mismatch.")
+
+        version, msg_type, threshold_db = CONTROL_SQUELCH_HEADER.unpack(payload)
+        if version != MESSAGE_VERSION:
+            raise ValueError(f"Unsupported message version: {version}")
+        if msg_type != MSG_TYPE_CONTROL_SQUELCH:
+            raise ValueError(f"Unsupported message type: {msg_type}")
+
+        return cls(threshold_db=threshold_db)

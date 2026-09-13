@@ -160,6 +160,8 @@ PyQt5 が必要です（GNU Radio の Qt GUI に含まれるため、RF 環境�
 - **Detect SDRs**: 接続中の SoapySDR デバイスを一覧し、プロファイルの driver が実際に繋がっているかを確認します。
 - **Backend**: `--replay` などの追加引数を渡せます（`--config` の後に付与するので、ここで明示すれば上書きできます）。
 
+設定パネルの外、常時表示のコントロール行には **Squelch** スライダーがあります。スケルチ (`[demod].squelch_threshold`) は SDR のゲイン設定によって適正値が変わり、外れていると音もエラーも無いまま全チャンネルが無音化する値なので（→ [新しい SDR で注意する項目](#新しい-sdr-で注意する項目)）、録音の再生や再起動を挟まずに **受信中でも動かして即座に効果を確認**できるようにしてあります。Start 時点のスライダー値がそのまま backend に `--squelch` として渡され、動作中の変更は制御ソケット経由でフローグラフへライブ反映されます。良い値が見つかったら **Save** でプロファイルの `[demod].squelch_threshold` に書き込めます（選択中のプロファイルが無いと無効）。
+
 #### デスクトップに登録
 
 `install-desktop.sh` を実行すると、アプリメニューから起動できる `.desktop` エントリとアイコンを登録します（root 不要、`~/.local/share` 配下のみ、再実行安全）。PyQt5 を import できる Python（`env/bin/python` があれば優先、無ければシステム `python3`）を自動選択して Exec に絶対パスで埋め込むため、登録後は端末も `export` も不要でメニューから起動できます。
@@ -322,6 +324,7 @@ launcher（端末）と GUI は、プロセスの起動・停止・状態集約�
 | status | `std_t98_multi_status.sock` |
 | secret request | `std_t98_multi_secret_request.sock` |
 | secret result | `std_t98_multi_secret_result.sock` |
+| control（GUI→backend、ライブスケルチ変更） | `std_t98_multi_control.sock` |
 
 置き場所は `STD_T98_RUNTIME_DIR` でまとめて、個別パスは `STD_T98_MULTI_FRAME_SOCKET` などで上書きできます（個別指定が優先）。backend と service を別々に起動する場合は、双方の `XDG_RUNTIME_DIR` が一致していることを確認してください（systemd unit や `sudo` 経由では未設定になり `/tmp` 側にずれます）。launcher 経由なら環境変数が継承されるため揃います。
 

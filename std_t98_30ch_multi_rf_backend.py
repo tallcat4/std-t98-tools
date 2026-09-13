@@ -245,6 +245,45 @@ class test3(gr.top_block):
             self.null_sinks.append(ns)
             self.connect((self.pfb_channelizer_ccf_0, ch), (ns, 0))
 
+    def set_squelch_threshold(self, threshold_db):
+        """Re-tune every channel's squelch on a running flowgraph.
+
+        analog.simple_squelch_cc supports changing its threshold live (the
+        same mechanism GRC range widgets use), so this needs no restart.
+        """
+        self.squelch_threshold = threshold_db
+        for squelch in self.simple_squelch:
+            squelch.set_threshold(threshold_db)
+
+
+def _run_control_loop(tb, socket_path):
+    """Background thread: apply live squelch changes from the GUI.
+
+    Connects as a client because the supervisor (server) binds the control
+    socket before spawning this process. Exits quietly on disconnect -- the
+    supervisor closes the socket right before SIGINT-ing this process anyway.
+    """
+    from ipc.message_schema import ControlSquelchPacket
+    from ipc.transport.uds_seqpacket import UdsSeqpacketClient
+
+    try:
+        client = UdsSeqpacketClient(socket_path, connect_timeout=10.0)
+    except (OSError, TimeoutError):
+        return
+
+    while True:
+        try:
+            payload = client.recv()
+        except OSError:
+            return
+        if not payload:
+            return
+        try:
+            packet = ControlSquelchPacket.decode(payload)
+        except ValueError:
+            continue
+        tb.set_squelch_threshold(packet.threshold_db)
+
 
 def _parse_args(argv=None):
     import argparse
@@ -265,6 +304,12 @@ def _parse_args(argv=None):
         action="store_true",
         help="Print the resolved config and derived rates, then exit without "
         "opening the SDR or starting the flowgraph.",
+    )
+    parser.add_argument(
+        "--control-socket",
+        help="UDS SOCK_SEQPACKET path to receive live control messages on "
+        "(currently: squelch threshold changes). Set by the GUI/launcher's "
+        "StackSupervisor; not needed when running this script by hand.",
     )
     return parser.parse_args(argv)
 
@@ -311,6 +356,12 @@ def main(top_block_cls=test3, options=None):
     tb = top_block_cls(config=config, replay=args.replay)
     if args.replay:
         print(f"replaying {args.replay} instead of opening the SDR")
+
+    if args.control_socket:
+        control_thread = threading.Thread(
+            target=_run_control_loop, args=(tb, args.control_socket), daemon=True
+        )
+        control_thread.start()
 
     def sig_handler(sig=None, frame=None):
         tb.stop()
