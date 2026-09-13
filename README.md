@@ -79,6 +79,17 @@ launcher は別経路で各プロセスの `StatusPacket` を集約し、チャ�
 - `ipc/transport/uds_seqpacket.py`
   - Unix Domain Socket `SOCK_SEQPACKET` ベースの transport 実装です。
 
+### tools/
+
+実機立ち上げと不具合切り分けのための診断ツールです。復号パイプラインには含まれません。
+
+- `tools/std_t98_channel_scope.py`
+  - 1 チャンネルを GUI で見ます。RF スペクトラム、ウォーターフォール、チャンネルスペクトラム、アイパターン、復調シンボルの 5 面。SDR を開く処理はバックエンドと共有するので、見えているものはバックエンドが見ているものです。`--replay` で録音を再生できます。
+- `tools/std_t98_record_iq.py`
+  - チャンネライザ入力（30ch 全部）をファイルに録ります。1 回の送信をオフラインで何度でも解析できます。
+- `tools/std_t98_analyse_capture.py`
+  - 録音を測ります。送信のあったチャンネルと時間帯、周波数オフセット、実シンボルレート、同期語の検出数を 1 コマンドで出します。
+
 ### 補助データ
 
 - `models/secret_voice/`
@@ -323,6 +334,46 @@ python3 tools/std_t98_channel_scope.py --driver uhd --sample-rate 2000000 \
 DSP はバックエンドと同一の設定（`fsk_dev` 315、RRC ロールオフ 0.2、Gardner TED など）を使い、SDR を開く処理も `core/rf/soapy_source.py` を共有します。レート検証もアンテナ確認も帯域幅もバックエンドと同じなので、**画面に出るものがバックエンドの見ているもの**です。
 
 `--no-squelch` はスケルチ（-25dB）を迂回します。弱い信号だとスケルチで消えてアイパターンが平坦になるため、切り分け中は付けておくのが安全です。
+
+### 録って解析する
+
+GUI を睨むより、1 回録って測る方が速く確実です。送信のたびに人を待たせる必要もありません。
+
+```bash
+# 30秒録る（>>> RECORDING <<< が出てから送信）
+python3 tools/std_t98_record_iq.py --driver uhd --sample-rate 2000000 \
+    --antenna "TX/RX" --gain-element PGA --no-agc --gain 10 \
+    --freq-err-offset 1030 --seconds 30 -o capture.cf32
+
+# 測る
+python3 tools/std_t98_analyse_capture.py capture.cf32
+
+# 同じ録音を GUI で見る（SDR 不要）
+python3 tools/std_t98_channel_scope.py --replay capture.cf32 --channel 0 --no-squelch
+```
+
+解析の出力例です。
+
+```
+noise floor -40.7 dB
+  ch0  (登録局 ch1 )  48.1 dB above floor, active  1.30-25.40s
+--- ch0 (登録局 ch1), 1.3-25.4s ---
+frequency offset        +4 Hz (DC +0.02 on the symbol stream)
+                  sync tolerates about 333 Hz
+symbol rate       2400.0311 baud (+13.0 ppm), phase drift +0.810 samples/s
+sync detections   267 (best SSE 0.25, threshold 14.8)
+```
+
+### 新しい SDR での周波数校正
+
+`freq_err_offset` の値はこの手順で決めます。
+
+1. `--freq-err-offset 0` で 30 秒録音し、その間に送信する
+2. `std_t98_analyse_capture.py` の `frequency offset` を読む
+3. その値をそのまま `--freq-err-offset` に渡して録り直す
+4. `frequency offset` が数十 Hz 以内、`sync detections` が 0 でなくなれば完了
+
+許容範囲は約 ±333 Hz しかないので、目分量では合いません。この値には SDR 側と送信機側の誤差が両方含まれるため、送信機を変えたら測り直しになります。
 
 うまくいかないときの切り分け順:
 
