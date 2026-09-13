@@ -401,6 +401,15 @@ python3 std_t98_multi_service_launcher.py \
     --backend-arg=--squelch --backend-arg=-40
 ```
 
+実機でも同じ形で起動できますが、引数が増えるので設定ファイルの方が扱いやすいです。`STD_T98_BACKEND_CONFIG` は launcher の子プロセスにも継承されます。
+
+```bash
+# ~/b210.toml に SDR 設定と [demod] squelch_threshold を書いておく
+STD_T98_BACKEND_CONFIG=~/b210.toml python3 std_t98_multi_service_launcher.py
+```
+
+複数チャンネルで同時に送信があれば、それぞれの CH 行が独立に OPEN になり、並列に復調・再生されます。
+
 音声が再生されれば、RF 段から AMBE 復号・音声出力までの全経路が通っています。暗号化された送信では、secret service が鍵を推定してキャッシュに登録し（dashboard の Secret Cache に鍵が現れます）、以降その鍵で復号されます。
 
 **起動順に注意してください。** audio service は voice / secret_request / secret_result の 3 ソケットに順に接続し、いずれも無限リトライします。secret service を起動していないと voice 接続後にブロックし、メインループに入りません（protocol の dashboard には `Traffic (no client)` と出ます）。
