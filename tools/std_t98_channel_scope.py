@@ -47,7 +47,7 @@ from firdes import make_rx_taps
 
 
 class ChannelScope(gr.top_block, Qt.QWidget):
-    def __init__(self, config, channel, use_squelch, eye_sps=None):
+    def __init__(self, config, channel, use_squelch, eye_sps=None, replay=None):
         gr.top_block.__init__(self, "STD-T98 Channel Scope", catch_exceptions=True)
         Qt.QWidget.__init__(self)
 
@@ -86,19 +86,28 @@ class ChannelScope(gr.top_block, Qt.QWidget):
         post_sync_gain = 5
 
         # ---------------- source ------------------------------------------
-        # Same helper the backend uses, so the device is configured
-        # identically -- rate validation and snapping, driver-aware stream args
-        # and bandwidth, antenna checking, and the gain fallbacks.
-        self._source = open_source(sdr_cfg)
-        self.source = self._source.source
+        self.replay = replay
+        if replay:
+            # A recording from std_t98_record_iq.py is already past stage 1, so
+            # it feeds the channelizer directly and needs a throttle to play at
+            # the rate it was captured at.
+            self.file_source = blocks.file_source(
+                gr.sizeof_gr_complex, str(replay), True)
+            self.throttle = blocks.throttle(
+                gr.sizeof_gr_complex, rates.samp_rate_post_resamp1, True, 0)
+        else:
+            # Same helper the backend uses, so the device is configured
+            # identically -- rate validation and snapping, driver-aware stream
+            # args and bandwidth, antenna checking, and the gain fallbacks.
+            self._source = open_source(sdr_cfg)
+            self.source = self._source.source
+            self.rotator = blocks.rotator_cc(0.0)
+            self.resamp1 = filter.rational_resampler_ccc(
+                interpolation=rates.resamp1_interp,
+                decimation=rates.resamp1_decim,
+                taps=[], fractional_bw=0)
 
         # ---------------- channelisation ----------------------------------
-        self.rotator = blocks.rotator_cc(0.0)
-        self.resamp1 = filter.rational_resampler_ccc(
-            interpolation=rates.resamp1_interp,
-            decimation=rates.resamp1_decim,
-            taps=[], fractional_bw=0)
-
         pfb_cutoff = rates.samp_rate_post_pfb / 2.0
         pfb_taps = filter.firdes.low_pass_2(
             1.0, rates.samp_rate_post_resamp1, pfb_cutoff, pfb_cutoff * 0.5,
@@ -133,8 +142,10 @@ class ChannelScope(gr.top_block, Qt.QWidget):
         self.sync_gain = blocks.multiply_const_ff(post_sync_gain)
 
         # ---------------- sinks -------------------------------------------
+        rf_view_rate = (rates.samp_rate_post_resamp1 if replay
+                        else sdr_cfg.sample_rate)
         self.rf_spectrum = qtgui.freq_sink_c(
-            4096, window.WIN_BLACKMAN_hARRIS, tuned_freq, sdr_cfg.sample_rate,
+            4096, window.WIN_BLACKMAN_hARRIS, tuned_freq, rf_view_rate,
             "RF spectrum (all 30 channels)", 1, None)
         self.rf_spectrum.set_y_axis(-130, 0)
         self.rf_spectrum.enable_grid(True)
@@ -142,7 +153,7 @@ class ChannelScope(gr.top_block, Qt.QWidget):
         top.addWidget(sip.wrapinstance(self.rf_spectrum.qwidget(), Qt.QWidget))
 
         self.rf_waterfall = qtgui.waterfall_sink_c(
-            2048, window.WIN_BLACKMAN_hARRIS, tuned_freq, sdr_cfg.sample_rate,
+            2048, window.WIN_BLACKMAN_hARRIS, tuned_freq, rf_view_rate,
             "RF waterfall", 1, None)
         self.rf_waterfall.set_intensity_range(-130, -30)
         top.addWidget(sip.wrapinstance(self.rf_waterfall.qwidget(), Qt.QWidget))
@@ -168,11 +179,15 @@ class ChannelScope(gr.top_block, Qt.QWidget):
         self.eye_sps = eye_sps or int(round(sps))
         eye_rate = baud_rate * self.eye_sps
         self.eye_resamp = filter.mmse_resampler_ff(0.0, demod_samp_rate / eye_rate)
+        # Scale to the units the sync correlator works in, so the eye's levels
+        # can be read directly against the sync word's +/-1 and +/-3 and match
+        # the symbol plot beside it.
+        self.eye_gain = blocks.multiply_const_ff(post_sync_gain)
         self.eye = qtgui.eye_sink_f(1024, eye_rate, 1, None)
         self.eye.set_samp_per_symbol(self.eye_sps)
-        # Wide enough that a signal riding on a frequency-error DC offset is
-        # still fully visible, rather than clipped off the top.
-        self.eye.set_y_axis(-2.0, 2.0)
+        # Room for the +/-3 outer levels and their overshoot, and for some
+        # residual frequency-error DC on top.
+        self.eye.set_y_axis(-5.0, 5.0)
         self.eye.enable_grid(True)
         self.eye.set_update_time(0.10)
         bottom.addWidget(sip.wrapinstance(self.eye.qwidget(), Qt.QWidget))
@@ -185,11 +200,17 @@ class ChannelScope(gr.top_block, Qt.QWidget):
         bottom.addWidget(sip.wrapinstance(self.symbols.qwidget(), Qt.QWidget))
 
         # ---------------- wiring ------------------------------------------
-        self.connect((self.source, 0), (self.rotator, 0))
-        self.connect((self.source, 0), (self.rf_spectrum, 0))
-        self.connect((self.source, 0), (self.rf_waterfall, 0))
-        self.connect((self.rotator, 0), (self.resamp1, 0))
-        self.connect((self.resamp1, 0), (self.channelizer, 0))
+        if self.replay:
+            self.connect((self.file_source, 0), (self.throttle, 0))
+            self.connect((self.throttle, 0), (self.channelizer, 0))
+            self.connect((self.throttle, 0), (self.rf_spectrum, 0))
+            self.connect((self.throttle, 0), (self.rf_waterfall, 0))
+        else:
+            self.connect((self.source, 0), (self.rotator, 0))
+            self.connect((self.source, 0), (self.rf_spectrum, 0))
+            self.connect((self.source, 0), (self.rf_waterfall, 0))
+            self.connect((self.rotator, 0), (self.resamp1, 0))
+            self.connect((self.resamp1, 0), (self.channelizer, 0))
 
         if use_squelch:
             self.connect((self.channelizer, channel), (self.squelch, 0))
@@ -202,11 +223,14 @@ class ChannelScope(gr.top_block, Qt.QWidget):
         self.connect((self.quad_demod, 0), (self.rx_filter, 0))
         self.connect((self.rx_filter, 0), (self.filt_gain, 0))
         self.connect((self.filt_gain, 0), (self.eye_resamp, 0))
-        self.connect((self.eye_resamp, 0), (self.eye, 0))
+        self.connect((self.eye_resamp, 0), (self.eye_gain, 0))
+        self.connect((self.eye_gain, 0), (self.eye, 0))
         self.connect((self.filt_gain, 0), (self.symbol_sync, 0))
         self.connect((self.symbol_sync, 0), (self.sync_gain, 0))
         self.connect((self.sync_gain, 0), (self.symbols, 0))
 
+        if replay:
+            print(f"replaying     {replay}")
         print(f"tuned to      {tuned_freq/1e6:.5f} MHz @ {sdr_cfg.sample_rate/1e6:.3f} Msps")
         print(f"watching      ch{channel} (登録局 ch{channel+1}) = {channel_freq/1e6:.5f} MHz")
         print(f"demod rate    {demod_samp_rate:.0f} Hz, {sps:.4f} samples/symbol")
@@ -236,6 +260,10 @@ def main():
         "--no-squelch", dest="squelch", action="store_false", default=True,
         help="Bypass the squelch, so a weak signal is still visible.")
     parser.add_argument(
+        "--replay", default=None,
+        help="Replay a recording from std_t98_record_iq.py instead of opening "
+        "the SDR. Lets a capture be examined without the radio.")
+    parser.add_argument(
         "--eye-sps", type=int, default=None,
         help="Samples per symbol for the eye display. Defaults to the chain's "
         "rate rounded to an integer (26); the true rate is fractional, so the "
@@ -245,7 +273,8 @@ def main():
     config = load_config(args)
 
     qapp = Qt.QApplication(sys.argv)
-    tb = ChannelScope(config, args.channel, args.squelch, args.eye_sps)
+    tb = ChannelScope(config, args.channel, args.squelch, args.eye_sps,
+                      args.replay)
     tb.start()
     tb.show()
 
