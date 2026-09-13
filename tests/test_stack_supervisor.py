@@ -3,7 +3,13 @@ from pathlib import Path
 import core.pipeline.stack_supervisor as supervisor_mod
 from core.pipeline.stack_supervisor import StackSupervisor, StatusAggregator
 from core.pipeline.multi_stack_dashboard import ProcessView
-from ipc.message_schema import ControlSquelchPacket, STATUS_SOURCE_PROTOCOL, STATUS_SOURCE_AUDIO, StatusPacket
+from ipc.message_schema import (
+    ControlSquelchPacket,
+    STATUS_SOURCE_AUDIO,
+    STATUS_SOURCE_PROTOCOL,
+    STATUS_SOURCE_RF,
+    StatusPacket,
+)
 
 
 def _fake_resolve(monkeypatch, service_python="/fake/env/python", backend_python="/fake/sys/python"):
@@ -92,6 +98,66 @@ def test_status_aggregator_folds_channel_and_service_state():
     assert aggregator.apply_packet(audio_packet) is True
     assert aggregator.channels[5].audio_status == "Playing"
     assert aggregator.channels[5].rx_status == "OPEN"
+
+
+class _FakeProcess:
+    def __init__(self, pid=123):
+        self.pid = pid
+
+    def poll(self):
+        return None  # still alive
+
+
+class _FakeStatusReceiver:
+    def __init__(self, payloads):
+        self._payloads = list(payloads)
+
+    def recv(self, timeout_ms=None):
+        return self._payloads.pop(0) if self._payloads else None
+
+
+def test_start_marks_all_processes_starting_not_running(monkeypatch):
+    _fake_resolve(monkeypatch)
+    monkeypatch.setattr(supervisor_mod, "_spawn_process", lambda spec, **kw: (_FakeProcess(), None))
+    monkeypatch.setattr(supervisor_mod, "UdsSeqpacketReceiver", lambda path: _FakeStatusReceiver([]))
+    monkeypatch.setattr(supervisor_mod, "UdsSeqpacketServer", lambda path: object())
+
+    sup = StackSupervisor(repo_root=Path("/tmp/std-t98-tools"))
+    sup.start()
+
+    # Alive is not the same as ready: a process (esp. the backend, still
+    # opening a possibly slow SDR) starts silent, not RUNNING.
+    assert [v.state for v in sup.process_views] == ["STARTING"] * 4
+
+
+def test_poll_promotes_only_the_process_that_actually_reported_in(monkeypatch):
+    _fake_resolve(monkeypatch)
+    sup = StackSupervisor(repo_root=Path("/tmp/std-t98-tools"))
+    sup.resolve()
+    sup._started = True
+    sup._processes = [(view.name, _FakeProcess()) for view in sup.process_views]
+    for view in sup.process_views:
+        view.state = "STARTING"
+
+    packet = StatusPacket.from_dict(
+        sequence=0,
+        monotonic_ns=0,
+        source=STATUS_SOURCE_RF,
+        channel_id=0,
+        payload_dict={"event": "service_metrics", "summary": "sync=0 ipc=0/0"},
+    )
+    sup._status_receiver = _FakeStatusReceiver([packet.encode()])
+
+    changed = sup.poll(timeout_ms=0)
+
+    assert changed is True
+    by_name = {v.name: v.state for v in sup.process_views}
+    assert by_name["backend"] == "RUNNING"
+    # No packet arrived from these -- a live-but-silent backend must not drag
+    # the others (or itself, before its first report) along with it.
+    assert by_name["protocol"] == "STARTING"
+    assert by_name["secret"] == "STARTING"
+    assert by_name["audio"] == "STARTING"
 
 
 def test_set_squelch_without_control_server_returns_false():

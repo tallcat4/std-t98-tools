@@ -9,7 +9,7 @@ pytest.importorskip("PyQt5.QtWidgets")
 
 from PyQt5 import QtCore, QtWidgets  # noqa: E402
 
-from app.main_window import MainWindow  # noqa: E402
+from app.main_window import MainWindow, ProcessBadge  # noqa: E402
 from core.pipeline.multi_stack_dashboard import ChannelView, ProcessView  # noqa: E402
 
 
@@ -78,6 +78,24 @@ def test_settings_panel_toggles(qapp):
     assert window._settings_panel.isVisibleTo(window) is True
     window._settings_toggle.setChecked(False)
     assert window._settings_panel.isVisibleTo(window) is False
+
+
+def test_process_badge_shows_waiting_hint_while_starting_and_silent(qapp):
+    badge = ProcessBadge("backend")
+    badge.update_from(ProcessView(name="backend", python_executable="/x", script_name="backend.py", state="STARTING"))
+    assert badge._state.text() == "STARTING"
+    assert "waiting for first report" in badge._detail.text()
+    assert badge._detail.isVisibleTo(badge)
+
+
+def test_process_badge_shows_metrics_once_reported(qapp):
+    badge = ProcessBadge("backend")
+    view = ProcessView(name="backend", python_executable="/x", script_name="backend.py", state="RUNNING")
+    view.detail = "sync=12 ipc=12/0 mode=sse active=1"
+    badge.update_from(view)
+    assert badge._state.text() == "RUNNING"
+    assert badge._detail.text() == "sync=12 ipc=12/0 mode=sse active=1"
+    assert badge._detail.isVisibleTo(badge)
 
 
 def test_squelch_slider_seeds_from_profile_and_defaults_without_one(qapp, tmp_path, monkeypatch):

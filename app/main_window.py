@@ -47,31 +47,54 @@ _PROCESS_STATE_COLOURS = {
 
 
 class ProcessBadge(QtWidgets.QFrame):
-    """One line of the process-health strip: name, coloured state, pid."""
+    """One line of the process-health strip: name, coloured state, pid, and
+    (once available) its own status-socket metrics -- e.g. the RF backend's
+    "sync=.../ipc=.../active=..." summary, which only appears once the
+    flowgraph is actually pulling samples. While STARTING that line is empty,
+    which is itself the readiness signal: a live but silent backend means the
+    SDR is still opening (firmware/FPGA load, USB re-enumeration, ...), not
+    that it is stuck.
+    """
 
     def __init__(self, name, parent=None):
         super().__init__(parent)
         self.setObjectName("processBadge")
-        layout = QtWidgets.QHBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        layout.setSpacing(8)
+        outer = QtWidgets.QVBoxLayout(self)
+        outer.setContentsMargins(8, 4, 8, 4)
+        outer.setSpacing(2)
 
+        header = QtWidgets.QHBoxLayout()
+        header.setSpacing(8)
         self._name = QtWidgets.QLabel(name)
         self._name.setStyleSheet("font-weight: 600;")
         self._state = QtWidgets.QLabel("--")
         self._pid = QtWidgets.QLabel("")
         self._pid.setStyleSheet("color: #888;")
 
-        layout.addWidget(self._name)
-        layout.addWidget(self._state)
-        layout.addStretch(1)
-        layout.addWidget(self._pid)
+        header.addWidget(self._name)
+        header.addWidget(self._state)
+        header.addStretch(1)
+        header.addWidget(self._pid)
+        outer.addLayout(header)
+
+        self._detail = QtWidgets.QLabel("")
+        self._detail.setStyleSheet("color: #888; font-family: monospace; font-size: 10px;")
+        self._detail.hide()
+        outer.addWidget(self._detail)
 
     def update_from(self, process_view):
         self._state.setText(process_view.state)
         colour = _PROCESS_STATE_COLOURS.get(process_view.state, "#b8860b")
         self._state.setStyleSheet(f"color: {colour}; font-weight: 700;")
         self._pid.setText(f"pid {process_view.pid}" if process_view.pid is not None else "")
+        if process_view.state == "STARTING" and not process_view.detail:
+            self._detail.setText("waiting for first report (e.g. SDR still opening)…")
+            self._detail.show()
+        elif process_view.detail:
+            self._detail.setText(process_view.detail)
+            self._detail.show()
+        else:
+            self._detail.hide()
 
 
 class ChannelCard(QtWidgets.QFrame):

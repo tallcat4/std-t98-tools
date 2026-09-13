@@ -487,7 +487,14 @@ class StackSupervisor:
             self._process_logs[spec.name] = log_file
             process_view = self.aggregator._process_views_by_name[spec.name]
             process_view.pid = process.pid
-            process_view.state = "RUNNING"
+            # STARTING until the process actually reports in over the status
+            # socket -- for the backend that means the SDR is open and the
+            # flowgraph is pulling samples, not just that the OS process
+            # exists. A slow/contended device bring-up (e.g. a B210 on USB2
+            # competing with the secret service's model load) can leave the
+            # process alive but silent for a while; a bare "RUNNING" badge
+            # would hide exactly that.
+            process_view.state = "STARTING"
 
         self._started = True
 
@@ -506,6 +513,17 @@ class StackSupervisor:
         while payload is not None:
             packet = StatusPacket.decode(payload)
             changed = self.aggregator.apply_packet(packet) or changed
+
+            # Any status packet at all proves this process has gotten far
+            # enough to report in (for the backend, that its status publisher
+            # is running inside a live work() call -- i.e. actually streaming).
+            process_view = self.aggregator._process_views_by_name.get(
+                SOURCE_PROCESS_NAMES.get(packet.source)
+            )
+            if process_view is not None and process_view.state == "STARTING":
+                process_view.state = "RUNNING"
+                changed = True
+
             payload = self._status_receiver.recv(timeout_ms=0)
 
         for name, process in self._processes:
@@ -520,9 +538,6 @@ class StackSupervisor:
                     self.exit_message += f"\n{tail}"
                 changed = True
                 break
-            if process_view.state != "RUNNING":
-                process_view.state = "RUNNING"
-                changed = True
 
         return changed
 
