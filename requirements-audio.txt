@@ -1,17 +1,12 @@
-# Audio service (std_t98_multi_audio_service.py) and secret service
-# (std_t98_multi_secret_service.py).
+# Audio service (std_t98_multi_audio_service.py).
 #
-# These are independent of the RF stack: a machine that only decodes captured
-# frames needs these without GNU Radio, and an RF-only machine needs neither.
+# Independent of the RF stack: a machine that only decodes captured frames
+# needs these without GNU Radio, and an RF-only machine needs none of them.
 #
 # sounddevice needs PortAudio at runtime (Debian/Ubuntu: libportaudio2).
-# torch is only used by the secret key search; install it from the index that
-# matches your CUDA/CPU setup if the default wheel is not what you want.
 
 numpy>=1.24,<2
 sounddevice>=0.4
-torch
-safetensors
 
 # pyambelib is NOT on PyPI, so it is left out of this file to keep
 # `pip install -r` working. It is the AMBE decoder binding (a wrapper around
@@ -22,4 +17,4 @@ safetensors
 #   pip install ./pyambelib
 #
 # Verify with: python3 -c "import pyambelib; pyambelib.AmbeDecoder()"
-# Without it the audio service cannot decode voice; the rest of the stack runs.
+# Without it the audio service cannot decode voice.

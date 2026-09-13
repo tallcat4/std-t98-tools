@@ -179,6 +179,27 @@ def _stop_secret_session(secret_state):
     secret_state.burst_window.clear()
 
 
+def _connect_secret(request_socket_path, result_socket_path, headless):
+    """Connect to the secret service if it is up, else run without it.
+
+    The secret key search needs torch; a machine that only wants to hear clear
+    traffic should not have to install it. When the service is absent the audio
+    service still decodes everything unencrypted -- encrypted calls just stay
+    scrambled -- instead of blocking forever on a socket that will never appear.
+    """
+    try:
+        request_client = UdsSeqpacketClient(
+            socket_path=request_socket_path, connect_timeout=5.0)
+        result_client = UdsSeqpacketClient(
+            socket_path=result_socket_path, connect_timeout=5.0)
+        return request_client, result_client
+    except TimeoutError:
+        if not headless:
+            print("Secret service not reachable; decoding clear traffic only "
+                  "(encrypted calls will stay scrambled).")
+        return None, None
+
+
 def _maybe_send_secret_request(packet, secret_state, request_client, request_sequence):
     if secret_state.pending_request or len(secret_state.burst_window) < SECRET_MIN_WINDOW_BURSTS:
         return request_sequence, False
@@ -190,6 +211,9 @@ def _maybe_send_secret_request(packet, secret_state, request_client, request_seq
         if burst_gap < SECRET_RECHECK_INTERVAL_BURSTS or len(secret_state.burst_window) < SECRET_MAX_WINDOW_BURSTS:
             return request_sequence, False
         window_bursts = list(secret_state.burst_window)[-SECRET_MAX_WINDOW_BURSTS:]
+
+    if request_client is None:
+        return request_sequence, False
 
     request_packet = SecretCrackRequestPacket(
         sequence=request_sequence,
@@ -538,11 +562,12 @@ def main(argv=None):
     secret_request_socket_path = resolve_secret_request_socket_path(channel_count=CHANNEL_COUNT)
     secret_result_socket_path = resolve_secret_result_socket_path(channel_count=CHANNEL_COUNT)
     voice_client = UdsSeqpacketClient(socket_path=voice_socket_path)
-    secret_request_client = UdsSeqpacketClient(socket_path=secret_request_socket_path)
-    secret_result_client = UdsSeqpacketClient(socket_path=secret_result_socket_path)
+    secret_request_client, secret_result_client = _connect_secret(
+        secret_request_socket_path, secret_result_socket_path, args.headless)
     poller = select.poll()
     poller.register(voice_client.fileno(), select.POLLIN)
-    poller.register(secret_result_client.fileno(), select.POLLIN)
+    if secret_result_client is not None:
+        poller.register(secret_result_client.fileno(), select.POLLIN)
     key_sequences = {DECRYPTION_KEY: generate_pn_sequence_196(DECRYPTION_KEY)}
     decoders = {}
     secret_states = {}
@@ -580,7 +605,7 @@ def main(argv=None):
             events = dict(poller.poll(100))
             current_time = time.time()
 
-            if secret_result_client.fileno() in events:
+            if secret_result_client is not None and secret_result_client.fileno() in events:
                 while True:
                     result_payload = secret_result_client.try_recv()
                     if not result_payload:
@@ -723,8 +748,10 @@ def main(argv=None):
         audio_output.close()
         status_publisher.close()
         voice_client.close()
-        secret_request_client.close()
-        secret_result_client.close()
+        if secret_request_client is not None:
+            secret_request_client.close()
+        if secret_result_client is not None:
+            secret_result_client.close()
 
 
 if __name__ == "__main__":

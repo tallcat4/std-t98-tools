@@ -47,6 +47,26 @@ def test_maybe_send_secret_request_does_not_block_channel_when_send_is_busy():
     assert secret_state.last_request_burst_index == -SECRET_RECHECK_INTERVAL_BURSTS
 
 
+def test_maybe_send_secret_request_is_a_noop_without_a_secret_service():
+    # No torch, no secret service: cracking is simply off, and the audio path
+    # must not touch a client that is None.
+    secret_state = SecretChannelState(active_key=123)
+    secret_state.session_id = 7
+    secret_state.burst_window.extend(
+        [b"\x00" * SECRET_BURST_BYTES_AMBE_2450] * SECRET_MIN_WINDOW_BURSTS)
+
+    sequence, request_sent = _maybe_send_secret_request(
+        packet=SimpleNamespace(channel_id=12, burst_index=34),
+        secret_state=secret_state,
+        request_client=None,
+        request_sequence=99,
+    )
+
+    assert sequence == 99
+    assert request_sent is False
+    assert secret_state.pending_request is False
+
+
 def test_parse_audio_latency_accepts_named_and_numeric_values():
     assert _parse_audio_latency(None) is None
     assert _parse_audio_latency("") is None

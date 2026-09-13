@@ -108,8 +108,11 @@ Linux 専用です（IPC に `AF_UNIX` の `SOCK_SEQPACKET` を使います）�
 | 区分 | 対象プロセス | 依存 | ファイル |
 | --- | --- | --- | --- |
 | RF 系 | RF backend / protocol service | GNU Radio（`gnuradio.soapy` 込み）、SoapySDR とデバイス別モジュール、`numpy` | `requirements-rf.txt` |
-| 音声系 | audio service / secret service | `sounddevice`（+ PortAudio）、`pyambelib`、`torch`、`safetensors`、`numpy` | `requirements-audio.txt` |
+| 音声系 | audio service | `sounddevice`（+ PortAudio）、`pyambelib`、`numpy` | `requirements-audio.txt` |
+| 秘話系（任意） | secret service | `torch`、`safetensors` | `requirements-secret.txt` |
 | 開発 | テスト | `pytest` | `requirements-dev.txt` |
+
+秘話系は**任意**です。audio service は secret service が起動しているかを自動判定し、無ければクリア音声だけを復号・再生します（暗号化された通信はスクランブルされたまま）。クリア音声だけ聞ければよいなら `torch` は不要です。
 
 GNU Radio と SoapySDR は PyPI からは入りません。ディストリのパッケージか radioconda を使ってください。
 
