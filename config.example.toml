@@ -91,3 +91,14 @@ pfb_num_channels = 48
 
 # Per-channel upsample factor before demodulation.
 resamp2_interp = 10
+
+[demod]
+# Per-channel squelch threshold in dB. This is an ABSOLUTE level, so it depends
+# on the SDR's gain and scaling: the same signal sits at different dB on
+# different radios. Too high and every channel is silently muted. The default
+# suits RTL-SDR; measure with tools/std_t98_analyse_capture.py on other devices
+# and set a value comfortably below the reported channel power.
+squelch_threshold = -25.0
+
+# Squelch power-averaging coefficient (1.0 = no averaging).
+squelch_alpha = 1.0
