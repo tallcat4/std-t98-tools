@@ -123,4 +123,6 @@ if [[ "${rf_ok}" == 0 ]]; then
     warn "The audio side is ready but the RF side is incomplete (see above)."
     warn "You can still work offline with --replay on a recording."
 fi
-echo "Next: python3 std_t98_multi_service_launcher.py   (see README 使い方)"
+echo "Next: python3 -m app                  # desktop GUI"
+echo "      ./install-desktop.sh            # add an app-menu launcher (optional)"
+echo "      python3 std_t98_multi_service_launcher.py   # terminal launcher"

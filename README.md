@@ -153,6 +153,17 @@ PyQt5 が必要です（GNU Radio の Qt GUI に含まれるため、RF 環境�
 - **Detect SDRs**: 接続中の SoapySDR デバイスを一覧し、設定の driver が実際に繋がっているかを確認します。
 - **Backend**: `--replay` などの追加引数を渡せます（`--config` の後に付与）。
 
+`devices/` に機種プリセットが入っており、**Device** プルダウンで選ぶと設定が埋まります。他機種は `devices/` に足せます（[`devices/README.md`](devices/README.md)）。
+
+#### デスクトップに登録
+
+`install-desktop.sh` を実行すると、アプリメニューから起動できる `.desktop` エントリとアイコンを登録します（root 不要、`~/.local/share` 配下のみ、再実行安全）。PyQt5 を import できる Python（`env/bin/python` があれば優先、無ければシステム `python3`）を自動選択して Exec に絶対パスで埋め込むため、登録後は端末も `export` も不要でメニューから起動できます。
+
+```bash
+./install-desktop.sh              # 登録（アプリメニューで「STD-T98」を検索）
+./install-desktop.sh --uninstall  # 解除
+```
+
 主な launcher オプション:
 
 | オプション | 説明 |
