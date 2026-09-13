@@ -7,7 +7,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 pytest.importorskip("PyQt5.QtWidgets")
 
-from PyQt5 import QtWidgets  # noqa: E402
+from PyQt5 import QtCore, QtWidgets  # noqa: E402
 
 from app.main_window import MainWindow  # noqa: E402
 from core.pipeline.multi_stack_dashboard import ChannelView, ProcessView  # noqa: E402
@@ -45,6 +45,39 @@ def test_device_combo_lists_presets_and_sets_config_path(qapp):
     # Editing the path away from a preset falls back to "(custom)".
     window._config_path.setText("/tmp/not-a-preset.toml")
     assert window._device_combo.currentIndex() == 0
+
+
+def test_calibration_saves_and_restores_per_config(qapp, tmp_path):
+    window = MainWindow()
+    # Isolate persistence from the real user settings.
+    window._settings = QtCore.QSettings(str(tmp_path / "s.ini"), QtCore.QSettings.IniFormat)
+
+    cfg_a = tmp_path / "a.toml"
+    cfg_a.write_text('[sdr]\ndriver = "uhd"\n')
+    cfg_b = tmp_path / "b.toml"
+    cfg_b.write_text('[sdr]\ndriver = "rtlsdr"\n')
+
+    window._config_path.setText(str(cfg_a))
+    window._freq_err.setText("1030")
+    window._save_current_calibration()
+
+    # Switching to another config shows its (absent) calibration...
+    window._config_path.setText(str(cfg_b))
+    assert window._freq_err.text() == ""
+    # ...and switching back restores the saved one.
+    window._config_path.setText(str(cfg_a))
+    assert window._freq_err.text() == "1030"
+
+
+def test_invalid_calibration_is_not_saved(qapp, tmp_path):
+    window = MainWindow()
+    window._settings = QtCore.QSettings(str(tmp_path / "s.ini"), QtCore.QSettings.IniFormat)
+    cfg = tmp_path / "a.toml"
+    cfg.write_text('[sdr]\ndriver = "uhd"\n')
+    window._config_path.setText(str(cfg))
+    window._freq_err.setText("not-a-number")
+    window._save_current_calibration()  # should be a no-op, not raise
+    assert window._load_calibrations() == {}
 
 
 def test_settings_panel_toggles(qapp):

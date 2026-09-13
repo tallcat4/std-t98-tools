@@ -150,8 +150,9 @@ PyQt5 が必要です（GNU Radio の Qt GUI に含まれるため、RF 環境�
 設定は折りたたみ式の Settings パネルで扱います（Start すると自動的に畳まれます）。
 
 - **Config**: backend の TOML を選択（Browse）。`STD_T98_BACKEND_CONFIG` があれば初期値として拾い、以降は前回のパスを記憶します。選んだ設定は `--dry-run` と同じ内容（driver / レート / 同調周波数 / アンテナ / 帯域 など）をその場でプレビューし、ファイルが無ければ起動前に警告します。
+- **Freq err offset**: 個体ごとの周波数校正値（Hz）。**設定ごとにこのマシンへ保存**され、次回その設定を選ぶと自動で復元し、`--freq-err-offset` として適用されます。プリセットは校正値を持たないため、機種プリセット＋この欄だけで実運用でき、プリセットや自分の TOML を編集する必要はありません。
 - **Detect SDRs**: 接続中の SoapySDR デバイスを一覧し、設定の driver が実際に繋がっているかを確認します。
-- **Backend**: `--replay` などの追加引数を渡せます（`--config` の後に付与）。
+- **Backend**: `--replay` などの追加引数を渡せます（`--config` / `--freq-err-offset` の後に付与するので、ここで明示すれば上書きできます）。
 
 `devices/` に機種プリセットが入っており、**Device** プルダウンで選ぶと設定が埋まります。他機種は `devices/` に足せます（[`devices/README.md`](devices/README.md)）。
 

@@ -8,6 +8,7 @@ The supervisor owns the process lifecycle; the window only starts/stops it and
 polls it from a QTimer so the Qt event loop never blocks.
 """
 
+import json
 import os
 import shlex
 import time
@@ -260,6 +261,20 @@ class MainWindow(QtWidgets.QMainWindow):
         config_row.addWidget(self._detect_button)
         panel.addLayout(config_row)
 
+        # Per-unit calibration: freq_err_offset, saved per config on this machine
+        # and passed as --freq-err-offset so presets stay unit-agnostic.
+        calib_row = QtWidgets.QHBoxLayout()
+        self._freq_err = QtWidgets.QLineEdit()
+        self._freq_err.setPlaceholderText("(none)")
+        self._freq_err.setMaximumWidth(120)
+        self._freq_err.textChanged.connect(self._update_preview)
+        self._freq_err.editingFinished.connect(self._save_current_calibration)
+        calib_row.addWidget(QtWidgets.QLabel("Freq err offset:"))
+        calib_row.addWidget(self._freq_err)
+        calib_row.addWidget(QtWidgets.QLabel("Hz — per-unit calibration, saved for this config."))
+        calib_row.addStretch(1)
+        panel.addLayout(calib_row)
+
         self._preview = QtWidgets.QPlainTextEdit()
         self._preview.setReadOnly(True)
         self._preview.setObjectName("preview")
@@ -360,6 +375,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._browse_button.setEnabled(not running)
         self._detect_button.setEnabled(not running)
         self._device_combo.setEnabled(not running)
+        self._freq_err.setEnabled(not running)
 
     # --- settings panel ----------------------------------------------------
     def _on_settings_toggled(self, checked):
@@ -369,8 +385,48 @@ class MainWindow(QtWidgets.QMainWindow):
         )
 
     def _on_config_path_changed(self):
-        self._update_preview()
         self._sync_device_combo()
+        self._load_calibration_into_field()
+        self._update_preview()
+
+    # --- per-unit calibration (freq_err_offset) ---------------------------
+    def _calibration_key(self):
+        text = self._config_path.text().strip()
+        return os.path.abspath(os.path.expanduser(text)) if text else "builtin"
+
+    def _load_calibrations(self):
+        try:
+            return json.loads(self._settings.value("calibrations", "{}", type=str) or "{}")
+        except (ValueError, TypeError):
+            return {}
+
+    def _save_calibration(self, key, value):
+        data = self._load_calibrations()
+        if value is None:
+            data.pop(key, None)
+        else:
+            data[key] = value
+        self._settings.setValue("calibrations", json.dumps(data))
+
+    def _load_calibration_into_field(self):
+        saved = self._load_calibrations().get(self._calibration_key())
+        # Programmatic setText fires textChanged (-> preview) but not
+        # editingFinished, so this restore does not re-save.
+        self._freq_err.setText("" if saved is None else f"{saved:g}")
+
+    def _parse_freq_err(self):
+        """Field value as a float, or None if empty. Raises ValueError if invalid."""
+        text = self._freq_err.text().strip()
+        if not text:
+            return None
+        return float(text)
+
+    def _save_current_calibration(self):
+        try:
+            value = self._parse_freq_err()
+        except ValueError:
+            return  # invalid text: leave the stored value untouched
+        self._save_calibration(self._calibration_key(), value)
 
     def _on_device_selected(self, _index):
         if self._syncing_device:
@@ -402,7 +458,21 @@ class MainWindow(QtWidgets.QMainWindow):
             self._preview_note.setText("")
             return
 
-        preview = preview_config(self._config_path.text().strip())
+        try:
+            override = self._parse_freq_err()
+            freq_err_note = ""
+        except ValueError:
+            override = None
+            freq_err_note = "Freq err offset must be a number."
+
+        preview = preview_config(self._config_path.text().strip(), freq_err_offset_override=override)
+        if freq_err_note:
+            self._preview.setPlainText(preview.summary)
+            self._preview_note.setText(freq_err_note)
+            self._preview_note.setProperty("level", "warn")
+            self._preview_note.style().unpolish(self._preview_note)
+            self._preview_note.style().polish(self._preview_note)
+            return
         if not preview.ok:
             self._preview.setPlainText("")
             self._preview_note.setText(preview.error)
@@ -499,10 +569,26 @@ class MainWindow(QtWidgets.QMainWindow):
                     self, "Cannot start", f"Config file not found:\n{exc}"
                 )
                 return
+
+            try:
+                freq_err = self._parse_freq_err()
+            except ValueError:
+                QtWidgets.QMessageBox.warning(
+                    self, "Cannot start", "Freq err offset must be a number (Hz), or empty."
+                )
+                return
+
+            # --config / --freq-err-offset first so extra args can still override.
+            resolved = []
             if config_path is not None:
-                # --config first so extra args (e.g. an explicit --squelch) win.
-                backend_args = ["--config", str(config_path), *extra_args]
+                resolved += ["--config", str(config_path)]
                 self._settings.setValue("config_path", str(config_path))
+            if freq_err is not None:
+                resolved += ["--freq-err-offset", f"{freq_err:g}"]
+            backend_args = [*resolved, *extra_args]
+
+            # Persist the calibration for this config so it comes back next time.
+            self._save_calibration(self._calibration_key(), freq_err)
 
         supervisor = StackSupervisor(
             repo_root=self.repo_root,

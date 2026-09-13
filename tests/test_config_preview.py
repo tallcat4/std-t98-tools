@@ -47,6 +47,25 @@ def test_preview_resolves_uhd_config(tmp_path):
     assert result.warnings == []
 
 
+def test_preview_applies_freq_err_override(tmp_path):
+    path = _write(tmp_path, """
+        [sdr]
+        driver = "uhd"
+        center_freq = 351293750
+    """)
+    base = preview_config(str(path))
+    over = preview_config(str(path), freq_err_offset_override=1030)
+    assert "+0 Hz" in base.summary
+    assert "+1030 Hz" in over.summary
+    assert "saved calibration" in over.summary
+
+
+def test_preview_override_on_builtin_defaults():
+    result = preview_config("", freq_err_offset_override=-340)
+    assert result.ok is True
+    assert "-340 Hz" in result.summary
+
+
 def test_list_device_presets_reads_comment_header(tmp_path):
     (tmp_path / "b.toml").write_text(dedent("""
         # USRP B210

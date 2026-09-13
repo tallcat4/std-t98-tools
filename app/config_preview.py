@@ -10,7 +10,7 @@ devices and tell whether the config's driver is among them.
 
 import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from core.rf.backend_config import derive_rates, load_config_file
@@ -24,18 +24,22 @@ class ConfigPreview:
     warnings: list[str] = field(default_factory=list)
 
 
-def preview_config(path) -> ConfigPreview:
+def preview_config(path, freq_err_offset_override=None) -> ConfigPreview:
     """Resolve a backend config path into a human-readable summary.
 
     An empty path means "no --config": the backend falls back to its built-in
     defaults (rtlsdr / 1.2 MHz). A missing or invalid file is reported as an
     error the window can show before the user hits Start.
+
+    ``freq_err_offset_override`` (Hz), when given, is the per-unit calibration the
+    GUI stores for this device and passes as ``--freq-err-offset``; the preview
+    reflects it so the tuned frequency shown matches what will actually be used.
     """
     if not path or not str(path).strip():
-        return ConfigPreview(
-            ok=True,
-            summary="No config file — built-in defaults (rtlsdr / 1.2 MHz).",
-        )
+        summary = "No config file — built-in defaults (rtlsdr / 1.2 MHz)."
+        if freq_err_offset_override is not None:
+            summary += f"\nFreq err offset : {freq_err_offset_override:+g} Hz (saved calibration)"
+        return ConfigPreview(ok=True, summary=summary)
 
     config_path = Path(str(path)).expanduser()
     if not config_path.exists():
@@ -47,6 +51,8 @@ def preview_config(path) -> ConfigPreview:
         return ConfigPreview(ok=False, error=f"Could not read config: {exc}")
 
     sdr = config.sdr
+    if freq_err_offset_override is not None:
+        sdr = replace(sdr, freq_err_offset=freq_err_offset_override)
     try:
         rates = derive_rates(sdr, config.channelizer)
     except Exception as exc:
@@ -60,10 +66,11 @@ def preview_config(path) -> ConfigPreview:
         element = sdr.gain_element or "overall"
         gain_desc = f"{sdr.tuner_gain:g} dB ({element})"
 
+    err_note = " · saved calibration" if freq_err_offset_override is not None else ""
     lines = [
         f"Device      : {sdr.device_string()}",
         f"Sample rate : {sdr.sample_rate:,.0f} Hz",
-        f"Tuned freq  : {sdr.tuned_freq():,.0f} Hz  (err {sdr.resolved_freq_err_offset():+g} Hz)",
+        f"Tuned freq  : {sdr.tuned_freq():,.0f} Hz  (err {sdr.resolved_freq_err_offset():+g} Hz{err_note})",
         f"Antenna     : {sdr.antenna or '(driver default)'}",
         f"Bandwidth   : {f'{bandwidth:,.0f} Hz' if bandwidth else '(device default)'}",
         f"Stream args : {stream_args or '(none)'}",
