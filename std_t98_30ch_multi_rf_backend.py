@@ -97,7 +97,6 @@ class test3(gr.top_block):
         self.post_filt_gain = post_filt_gain = 0.23
         self.post_sync_gain = post_sync_gain = 5
         self.rotator_phase_inc = rotator_phase_inc = 0.0
-        self.throttle_max_items_per_block = throttle_max_items_per_block = 0
 
         ##################################################
         # 6. PFB Taps Generation
@@ -144,7 +143,6 @@ class test3(gr.top_block):
             self.set_soapy_source_0_bias = self._source.set_bias
             self.soapy_rtlsdr_source_0 = self.soapy_source_0
 
-        self.blocks_throttle_1 = blocks.throttle(gr.sizeof_gr_complex*1, rf_samp_rate, True, throttle_max_items_per_block)
         self.blocks_freqshift_cc_0 = blocks.rotator_cc(rotator_phase_inc)
 
         self.rational_resampler_1 = filter.rational_resampler_ccc(
@@ -224,8 +222,10 @@ class test3(gr.top_block):
             self.connect((self.file_source, 0), (self.replay_throttle, 0))
             self.connect((self.replay_throttle, 0), (self.pfb_channelizer_ccf_0, 0))
         else:
-            self.connect((self.soapy_source_0, 0), (self.blocks_throttle_1, 0))
-            self.connect((self.blocks_throttle_1, 0), (self.blocks_freqshift_cc_0, 0))
+            # No throttle here: the SDR's sample clock already paces the
+            # flowgraph, and GNU Radio's throttle is explicitly not meant to
+            # share a graph with a hardware source.
+            self.connect((self.soapy_source_0, 0), (self.blocks_freqshift_cc_0, 0))
             self.connect((self.blocks_freqshift_cc_0, 0), (self.rational_resampler_1, 0))
             self.connect((self.rational_resampler_1, 0), (self.pfb_channelizer_ccf_0, 0))
 
