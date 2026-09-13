@@ -393,7 +393,15 @@ sync detections   267 (best SSE 0.25, threshold 14.8)
 python3 std_t98_30ch_multi_rf_backend.py --replay capture.cf32 --squelch -40
 ```
 
-音声が再生されれば、RF 段から AMBE 復号・音声出力までの全経路が通っています。
+launcher から一括で起動することもできます。`--backend-arg` でバックエンドに引数を渡せるので、録音再生のフルスタックが 1 コマンドで立ち上がります。
+
+```bash
+python3 std_t98_multi_service_launcher.py \
+    --backend-arg=--replay --backend-arg=capture.cf32 \
+    --backend-arg=--squelch --backend-arg=-40
+```
+
+音声が再生されれば、RF 段から AMBE 復号・音声出力までの全経路が通っています。暗号化された送信では、secret service が鍵を推定してキャッシュに登録し（dashboard の Secret Cache に鍵が現れます）、以降その鍵で復号されます。
 
 **起動順に注意してください。** audio service は voice / secret_request / secret_result の 3 ソケットに順に接続し、いずれも無限リトライします。secret service を起動していないと voice 接続後にブロックし、メインループに入りません（protocol の dashboard には `Traffic (no client)` と出ます）。
 

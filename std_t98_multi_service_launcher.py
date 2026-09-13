@@ -108,6 +108,15 @@ def _parse_args(argv=None):
         help="Print the resolved commands without starting any child process.",
     )
     parser.add_argument(
+        "--backend-arg",
+        action="append",
+        default=[],
+        metavar="ARG",
+        help="Extra argument to pass to the RF backend; repeat for several. "
+        "Mainly for --backend-arg=--replay --backend-arg=capture.cf32 to run "
+        "the whole stack from a recording, with no SDR.",
+    )
+    parser.add_argument(
         "--passthrough-output",
         action="store_true",
         help="Let child processes write directly to the terminal for debugging.",
@@ -168,7 +177,7 @@ def _resolve_python(override, candidate_paths, import_checks, role_name):
     )
 
 
-def build_process_specs(repo_root, service_python, status_socket_path=None, backend_python=None, include_backend=True):
+def build_process_specs(repo_root, service_python, status_socket_path=None, backend_python=None, include_backend=True, backend_args=()):
     service_python = Path(service_python)
     process_specs = [
         ProcessSpec(
@@ -194,7 +203,11 @@ def build_process_specs(repo_root, service_python, status_socket_path=None, back
     if include_backend:
         if backend_python is None:
             raise ValueError("backend_python is required when include_backend is True")
-        process_specs.append(ProcessSpec("backend", Path(backend_python), repo_root / "std_t98_30ch_multi_rf_backend.py"))
+        process_specs.append(ProcessSpec(
+            "backend", Path(backend_python),
+            repo_root / "std_t98_30ch_multi_rf_backend.py",
+            args=tuple(backend_args),
+        ))
 
     return process_specs
 
@@ -358,6 +371,7 @@ def main(argv=None):
         status_socket_path=status_socket_path,
         backend_python=backend_python,
         include_backend=not args.services_only,
+        backend_args=args.backend_arg,
     )
 
     if args.dry_run:

@@ -39,6 +39,21 @@ def test_build_process_specs_for_full_stack():
     assert process_specs[2].args == ("--headless", "--status-socket", status_socket_path)
     assert process_specs[3].python_executable == backend_python
     assert process_specs[3].script_path == repo_root / "std_t98_30ch_multi_rf_backend.py"
+    assert process_specs[3].args == ()
+
+
+def test_backend_args_are_passed_through():
+    # Lets the whole stack run from a recording: --backend-arg --replay ...
+    process_specs = build_process_specs(
+        repo_root=Path("/tmp/std-t98-tools"),
+        service_python=Path("/tmp/std-t98-tools/env/bin/python"),
+        backend_python=Path("/usr/bin/python"),
+        include_backend=True,
+        backend_args=["--replay", "capture.cf32", "--squelch", "-40"],
+    )
+    backend = process_specs[3]
+    assert backend.name == "backend"
+    assert backend.args == ("--replay", "capture.cf32", "--squelch", "-40")
 
 
 def test_build_process_specs_for_services_only():
