@@ -29,9 +29,14 @@ center_freq = 351_293_750
 # Deliberate tuning offset (Hz), applied on top of center_freq.
 freq_offset = 0
 
-# Per-device frequency error correction (Hz). This is calibration for a
-# specific radio and should be re-measured per device.
-freq_err_offset = -340
+# Per-device frequency error correction (Hz). Commented out on purpose: this is
+# calibration for one physical radio, not a property of the driver, so it is
+# applied only to the device it was measured on (rtlsdr: -340) and every other
+# device starts from 0. Applying a foreign device's value is actively harmful --
+# the demodulator turns a frequency error into a DC level on the symbol stream,
+# and -340 Hz alone is enough DC to push the sync detector past its threshold.
+# Measure it for your own radio and set it here, or 0 to disable it explicitly.
+#freq_err_offset = -340
 
 # Frequency correction in ppm (SoapySDR set_frequency_correction). Ignored on
 # devices that do not support it.

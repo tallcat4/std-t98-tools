@@ -113,6 +113,29 @@ class SampleRateSuitabilityTest(unittest.TestCase):
         self.assertEqual(nearest_sample_rates([0.0, -1.0], 1_200_000.0), [])
 
 
+class FreqErrOffsetTest(unittest.TestCase):
+    def test_rtlsdr_keeps_its_measured_calibration(self):
+        self.assertEqual(SdrConfig().resolved_freq_err_offset(), -340.0)
+        self.assertEqual(SdrConfig().tuned_freq(), 351_293_750 - 340)
+
+    def test_other_drivers_start_from_zero(self):
+        # -340 Hz was measured on one RTL-SDR. On another radio it is 1.24
+        # symbol units of DC, which alone exceeds the sync SSE threshold.
+        for driver in ("uhd", "hackrf", "airspy"):
+            with self.subTest(driver=driver):
+                sdr = SdrConfig(driver=driver)
+                self.assertEqual(sdr.resolved_freq_err_offset(), 0.0)
+                self.assertEqual(sdr.tuned_freq(), 351_293_750)
+
+    def test_explicit_calibration_wins(self):
+        sdr = SdrConfig(driver="uhd", freq_err_offset=1030.0)
+        self.assertEqual(sdr.tuned_freq(), 351_293_750 + 1030)
+
+    def test_zero_disables_the_rtlsdr_default(self):
+        sdr = SdrConfig(driver="rtlsdr", freq_err_offset=0)
+        self.assertEqual(sdr.resolved_freq_err_offset(), 0.0)
+
+
 class BandwidthTest(unittest.TestCase):
     def test_rtlsdr_is_left_alone(self):
         # RTL-SDR tracks its filter to the rate; touching it would change
@@ -194,7 +217,7 @@ class ConfigLoadingTest(unittest.TestCase):
         # meaningless on any other radio.
         args = self._parse(["--driver", "uhd", "--freq-err-offset", "1030"])
         config = apply_cli_overrides(BackendConfig(), args)
-        self.assertEqual(config.sdr.freq_err_offset, 1030.0)
+        self.assertEqual(config.sdr.resolved_freq_err_offset(), 1030.0)
 
     def test_cli_sets_bandwidth(self):
         args = self._parse(["--driver", "uhd", "--bandwidth", "3000000"])

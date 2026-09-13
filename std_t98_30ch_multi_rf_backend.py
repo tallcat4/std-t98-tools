@@ -40,7 +40,7 @@ class test3(gr.top_block):
         self.rf_samp_rate = rf_samp_rate = sdr_cfg.sample_rate
         self.rf_freq = rf_freq = sdr_cfg.center_freq
         self.freq_offset = freq_offset = sdr_cfg.freq_offset
-        self.freq_err_offset = freq_err_offset = sdr_cfg.freq_err_offset
+        self.freq_err_offset = freq_err_offset = sdr_cfg.resolved_freq_err_offset()
 
         self.sdr_tuner_gain = sdr_tuner_gain = sdr_cfg.tuner_gain
         self.sdr_agc_enabled = sdr_agc_enabled = sdr_cfg.agc
@@ -258,6 +258,8 @@ def _print_dry_run(config):
     # at all, so a failing driver can be diagnosed without starting the SDR.
     print("[sdr.resolved]")
     print(f"  device_string = {config.sdr.device_string()!r}")
+    print(f"  freq_err_offset = {config.sdr.resolved_freq_err_offset():+.1f} Hz")
+    print(f"  tuned_freq = {config.sdr.tuned_freq():.0f} Hz")
     print(f"  stream_args = {config.sdr.resolved_stream_args()!r}")
     print(f"  antenna = {config.sdr.antenna or '(driver default)'}")
     bandwidth = config.sdr.resolved_bandwidth()

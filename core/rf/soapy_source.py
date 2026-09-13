@@ -158,9 +158,7 @@ def open_source(sdr_cfg) -> ConfiguredSource:
             # Not every device exposes a tunable analog filter.
             pass
 
-    source.set_frequency(
-        0, sdr_cfg.center_freq + sdr_cfg.freq_offset + sdr_cfg.freq_err_offset
-    )
+    source.set_frequency(0, sdr_cfg.tuned_freq())
     if sdr_cfg.freq_correction:
         try:
             source.set_frequency_correction(0, sdr_cfg.freq_correction)

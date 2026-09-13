@@ -61,7 +61,7 @@ class ChannelScope(gr.top_block, Qt.QWidget):
                 f"channel must be 0..{num_channels - 1} (got {channel})"
             )
 
-        tuned_freq = sdr_cfg.center_freq + sdr_cfg.freq_offset + sdr_cfg.freq_err_offset
+        tuned_freq = sdr_cfg.tuned_freq()
         channel_freq = tuned_freq + (channel - num_channels // 2) * spacing
 
         self.setWindowTitle(

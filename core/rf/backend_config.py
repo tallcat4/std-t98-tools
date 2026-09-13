@@ -62,6 +62,18 @@ DRIVER_DEFAULT_STREAM_ARGS = {
 # kHz this actually cares about -- so those get the bandwidth set for them.
 DRIVERS_WITH_AUTOMATIC_BANDWIDTH = {"rtlsdr"}
 
+# Frequency error is a property of one physical radio, not of a driver, so a
+# value measured on one device is meaningless on another and actively harmful:
+# the demodulator turns it into a DC level on the symbol stream, and the sync
+# correlator compares against absolute levels with no DC removal. The historical
+# -340 Hz was measured on one RTL-SDR; on any other radio it is 1.24 symbol
+# units of error, enough on its own to push the sync SSE past its threshold.
+# So it stays attached to the driver it was measured on, and every other device
+# starts from zero and must be calibrated (or corrected) for itself.
+DRIVER_DEFAULT_FREQ_ERR_OFFSET = {
+    "rtlsdr": -340.0,
+}
+
 # Resampler ratio search cap. Keeps GNU Radio's rational_resampler taps sane
 # when the input rate is not an exact multiple of the channelizer rate; the
 # resulting rate error is well under 1 ppm for any realistic SDR rate.
@@ -77,7 +89,8 @@ class SdrConfig:
     sample_rate: float = 1_200_000.0
     center_freq: float = float(DEFAULT_CENTER_FREQ_HZ)
     freq_offset: float = 0.0          # deliberate tuning offset (Hz)
-    freq_err_offset: float = -340.0   # per-device frequency error correction (Hz)
+    # None asks for this driver's default (see above); 0 means no correction.
+    freq_err_offset: Optional[float] = None
     freq_correction: float = 0.0      # frequency correction in ppm
     tuner_gain: float = 30.0
     agc: bool = True
@@ -113,6 +126,16 @@ class SdrConfig:
         if self.stream_args is not None:
             return self.stream_args
         return DRIVER_DEFAULT_STREAM_ARGS.get(self.driver, "")
+
+    def resolved_freq_err_offset(self) -> float:
+        """Frequency error correction actually applied, in Hz."""
+        if self.freq_err_offset is not None:
+            return self.freq_err_offset
+        return DRIVER_DEFAULT_FREQ_ERR_OFFSET.get(self.driver, 0.0)
+
+    def tuned_freq(self) -> float:
+        """The frequency the SDR is actually told to tune to."""
+        return self.center_freq + self.freq_offset + self.resolved_freq_err_offset()
 
     def resolved_bandwidth(self) -> Optional[float]:
         """Analog bandwidth to request, or None to leave the device alone."""
@@ -344,8 +367,10 @@ def add_config_arguments(parser) -> None:
     parser.add_argument(
         "--freq-err-offset", type=float,
         help="Per-device frequency error correction in Hz, added to the tuned "
-        "frequency. This is calibration for one specific radio, so it must be "
-        "re-measured when the SDR changes.",
+        "frequency. This is calibration for one specific radio: it is applied "
+        "only to the driver it was measured on (rtlsdr: -340), and any other "
+        "device starts from 0 and must be measured for itself. Pass 0 to "
+        "disable it explicitly.",
     )
     parser.add_argument("--freq-correction", type=float, help="Frequency correction in ppm.")
     parser.add_argument("--pfb-channels", type=int, help="Number of PFB channels (>= num_channels).")
