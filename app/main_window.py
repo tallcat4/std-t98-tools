@@ -8,12 +8,14 @@ The supervisor owns the process lifecycle; the window only starts/stops it and
 polls it from a QTimer so the Qt event loop never blocks.
 """
 
+import os
 import shlex
 import time
 from pathlib import Path
 
 from PyQt5 import QtCore, QtWidgets
 
+from app.config_preview import detect_sdrs, preview_config
 from core.pipeline.multi_stack_dashboard import (
     ChannelView,
     _format_csm,
@@ -21,6 +23,7 @@ from core.pipeline.multi_stack_dashboard import (
     _format_secret_cache,
 )
 from core.pipeline.stack_supervisor import StackSupervisor
+from core.rf.backend_config import CONFIG_ENV_VAR
 
 CHANNEL_COUNT = 30
 POLL_INTERVAL_MS = 100
@@ -164,8 +167,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.repo_root = Path(repo_root) if repo_root else Path(__file__).resolve().parent.parent
         self.supervisor = None
 
+        # Remember the last config across launches; fall back to the same env
+        # var the backend/launcher read, so an existing workflow still works.
+        self._settings = QtCore.QSettings("std-t98-tools", "receiver")
+        self._initial_config_path = (
+            self._settings.value("config_path", "", type=str)
+            or os.environ.get(CONFIG_ENV_VAR, "")
+        )
+
         self.setWindowTitle("STD-T98 Multi Receiver")
-        self.resize(1100, 760)
+        self.resize(1100, 820)
 
         self._timer = QtCore.QTimer(self)
         self._timer.setInterval(POLL_INTERVAL_MS)
@@ -174,6 +185,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_ui()
         self._apply_stylesheet()
         self._set_running(False)
+        self._update_preview()
 
     # --- UI construction ---------------------------------------------------
     def _build_ui(self):
@@ -183,7 +195,7 @@ class MainWindow(QtWidgets.QMainWindow):
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(10)
 
-        # Control bar
+        # Control bar (row 1): run controls
         controls = QtWidgets.QHBoxLayout()
         self._start_button = QtWidgets.QPushButton("Start")
         self._stop_button = QtWidgets.QPushButton("Stop")
@@ -192,18 +204,64 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._services_only = QtWidgets.QCheckBox("Services only")
         self._services_only.setToolTip("Assume the RF backend is started separately.")
+        self._services_only.toggled.connect(self._update_preview)
         self._show_debug = QtWidgets.QCheckBox("Debug metrics")
 
-        self._backend_args = QtWidgets.QLineEdit()
-        self._backend_args.setPlaceholderText("Backend args, e.g. --replay capture.cf32 --squelch -40")
+        self._settings_toggle = QtWidgets.QToolButton()
+        self._settings_toggle.setText("Settings")
+        self._settings_toggle.setCheckable(True)
+        self._settings_toggle.setChecked(True)
+        self._settings_toggle.setToolButtonStyle(QtCore.Qt.ToolButtonTextBesideIcon)
+        self._settings_toggle.setArrowType(QtCore.Qt.DownArrow)
+        self._settings_toggle.toggled.connect(self._on_settings_toggled)
 
         controls.addWidget(self._start_button)
         controls.addWidget(self._stop_button)
         controls.addWidget(self._services_only)
         controls.addWidget(self._show_debug)
-        controls.addWidget(QtWidgets.QLabel("Backend:"))
-        controls.addWidget(self._backend_args, 1)
+        controls.addStretch(1)
+        controls.addWidget(self._settings_toggle)
         root.addLayout(controls)
+
+        # Collapsible settings panel: config picker, resolved preview, extra
+        # backend args. Not needed while receiving, so it folds away on Start.
+        self._settings_panel = QtWidgets.QWidget()
+        panel = QtWidgets.QVBoxLayout(self._settings_panel)
+        panel.setContentsMargins(0, 0, 0, 0)
+
+        config_row = QtWidgets.QHBoxLayout()
+        self._config_path = QtWidgets.QLineEdit(self._initial_config_path)
+        self._config_path.setPlaceholderText("(no config — built-in RTL-SDR defaults)")
+        self._config_path.textChanged.connect(self._update_preview)
+        self._browse_button = QtWidgets.QPushButton("Browse…")
+        self._browse_button.clicked.connect(self._browse_config)
+        self._detect_button = QtWidgets.QPushButton("Detect SDRs")
+        self._detect_button.clicked.connect(self._detect_sdrs)
+        config_row.addWidget(QtWidgets.QLabel("Config:"))
+        config_row.addWidget(self._config_path, 1)
+        config_row.addWidget(self._browse_button)
+        config_row.addWidget(self._detect_button)
+        panel.addLayout(config_row)
+
+        self._preview = QtWidgets.QPlainTextEdit()
+        self._preview.setReadOnly(True)
+        self._preview.setObjectName("preview")
+        self._preview.setFixedHeight(150)
+        self._preview.setLineWrapMode(QtWidgets.QPlainTextEdit.NoWrap)
+        panel.addWidget(self._preview)
+        self._preview_note = QtWidgets.QLabel("")
+        self._preview_note.setObjectName("previewNote")
+        self._preview_note.setWordWrap(True)
+        panel.addWidget(self._preview_note)
+
+        backend_row = QtWidgets.QHBoxLayout()
+        self._backend_args = QtWidgets.QLineEdit()
+        self._backend_args.setPlaceholderText("Extra backend args, e.g. --replay capture.cf32 --squelch -40")
+        backend_row.addWidget(QtWidgets.QLabel("Backend:"))
+        backend_row.addWidget(self._backend_args, 1)
+        panel.addLayout(backend_row)
+
+        root.addWidget(self._settings_panel)
 
         # Process health strip
         self._process_row = QtWidgets.QHBoxLayout()
@@ -269,6 +327,9 @@ class MainWindow(QtWidgets.QMainWindow):
             }
             QFrame#processBadge { border: none; }
             QLabel#cacheLabel { color: #a15fb0; font-weight: 600; }
+            QPlainTextEdit#preview { font-family: monospace; font-size: 11px; }
+            QLabel#previewNote[level="error"] { color: #c62828; font-weight: 600; }
+            QLabel#previewNote[level="warn"] { color: #b8860b; font-weight: 600; }
             """
         )
 
@@ -278,20 +339,130 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stop_button.setEnabled(running)
         self._services_only.setEnabled(not running)
         self._backend_args.setEnabled(not running)
+        self._config_path.setEnabled(not running)
+        self._browse_button.setEnabled(not running)
+        self._detect_button.setEnabled(not running)
+
+    # --- settings panel ----------------------------------------------------
+    def _on_settings_toggled(self, checked):
+        self._settings_panel.setVisible(checked)
+        self._settings_toggle.setArrowType(
+            QtCore.Qt.DownArrow if checked else QtCore.Qt.RightArrow
+        )
+
+    def _update_preview(self):
+        # In services-only mode the RF backend is started elsewhere, so the
+        # config here is irrelevant -- say so instead of resolving it.
+        if self._services_only.isChecked():
+            self._preview.setPlainText("Services only — the RF backend (and its config) is started separately.")
+            self._preview_note.setText("")
+            return
+
+        preview = preview_config(self._config_path.text().strip())
+        if not preview.ok:
+            self._preview.setPlainText("")
+            self._preview_note.setText(preview.error)
+            self._preview_note.setProperty("level", "error")
+        else:
+            self._preview.setPlainText(preview.summary)
+            if preview.warnings:
+                self._preview_note.setText("⚠ " + "\n⚠ ".join(preview.warnings))
+                self._preview_note.setProperty("level", "warn")
+            else:
+                self._preview_note.setText("")
+                self._preview_note.setProperty("level", "ok")
+        self._preview_note.style().unpolish(self._preview_note)
+        self._preview_note.style().polish(self._preview_note)
+
+    def _browse_config(self):
+        start_dir = ""
+        current = self._config_path.text().strip()
+        if current:
+            start_dir = str(Path(current).expanduser().parent)
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Select backend config", start_dir, "TOML config (*.toml);;All files (*)"
+        )
+        if path:
+            self._config_path.setText(path)
+
+    def _detect_sdrs(self):
+        devices, error = detect_sdrs()
+        if devices is None:
+            QtWidgets.QMessageBox.warning(self, "Detect SDRs", error)
+            return
+        if not devices:
+            QtWidgets.QMessageBox.information(
+                self, "Detect SDRs", error or "No SoapySDR devices found."
+            )
+            return
+
+        lines = []
+        for device in devices:
+            bits = [f"driver={device.driver}"]
+            if device.label:
+                bits.append(f"label={device.label}")
+            if device.serial:
+                bits.append(f"serial={device.serial}")
+            lines.append("  • " + "  ".join(bits))
+
+        # Tell the user whether the config's driver is actually present.
+        note = ""
+        preview_path = self._config_path.text().strip()
+        if preview_path:
+            config = preview_config(preview_path)
+            if config.ok:
+                driver = config.summary.splitlines()[0].split("driver=")[-1].split(",")[0]
+                present = {device.driver for device in devices}
+                if driver in present:
+                    note = f"\nConfig driver '{driver}' is connected."
+                else:
+                    note = (
+                        f"\n⚠ Config driver '{driver}' is NOT among the connected devices "
+                        f"({', '.join(sorted(present))})."
+                    )
+
+        QtWidgets.QMessageBox.information(
+            self, "Detected SDRs", "\n".join(lines) + note
+        )
+
+    def _resolved_config_path(self):
+        """The config path to use, or None. Raises FileNotFoundError if set but missing."""
+        text = self._config_path.text().strip()
+        if not text:
+            return None
+        path = Path(text).expanduser()
+        if not path.exists():
+            raise FileNotFoundError(str(path))
+        return path
 
     def start_stack(self):
         if self.supervisor is not None:
             return
 
         try:
-            backend_args = shlex.split(self._backend_args.text().strip())
+            extra_args = shlex.split(self._backend_args.text().strip())
         except ValueError as exc:
             QtWidgets.QMessageBox.warning(self, "Backend args", f"Could not parse backend args: {exc}")
             return
 
+        services_only = self._services_only.isChecked()
+        backend_args = list(extra_args)
+        if not services_only:
+            try:
+                config_path = self._resolved_config_path()
+            except FileNotFoundError as exc:
+                QtWidgets.QMessageBox.critical(
+                    self, "Cannot start", f"Config file not found:\n{exc}"
+                )
+                return
+            if config_path is not None:
+                # --config first so extra args (e.g. an explicit --squelch) win.
+                backend_args = ["--config", str(config_path), *extra_args]
+                self._settings.setValue("config_path", str(config_path))
+
         supervisor = StackSupervisor(
             repo_root=self.repo_root,
-            services_only=self._services_only.isChecked(),
+            services_only=services_only,
             backend_args=backend_args,
         )
 
@@ -307,6 +478,7 @@ class MainWindow(QtWidgets.QMainWindow):
         supervisor.start()
         self.supervisor = supervisor
         self._set_running(True)
+        self._settings_toggle.setChecked(False)  # fold settings away while receiving
         self._status_bar.showMessage(f"Running ({supervisor.mode_label}).")
         self._timer.start()
 

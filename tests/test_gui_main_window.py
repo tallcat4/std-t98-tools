@@ -29,6 +29,15 @@ def test_channel_grid_has_fixed_thirty_cards(qapp):
     assert window._cards[29]._title.text() == "CH 30"
 
 
+def test_settings_panel_toggles(qapp):
+    window = MainWindow()
+    assert window._settings_panel.isVisibleTo(window) is True
+    window._settings_toggle.setChecked(False)
+    assert window._settings_panel.isVisibleTo(window) is False
+    window._settings_toggle.setChecked(True)
+    assert window._settings_panel.isVisibleTo(window) is True
+
+
 def test_refresh_marks_open_channel_and_secret_cache(qapp):
     window = MainWindow()
 

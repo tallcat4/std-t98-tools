@@ -136,13 +136,19 @@ python3 std_t98_multi_service_launcher.py
 
 ### デスクトップ GUI
 
-launcher と同じスタックを、端末ではなく GUI で起動・監視できます。プロセスの起動・停止・状態集約は launcher と共通の `StackSupervisor` を使い、30 チャンネルをタイル表示します。SDR 設定は launcher と同じく設定ファイル／環境変数で渡します。
+launcher と同じスタックを、端末ではなく GUI で起動・監視できます。プロセスの起動・停止・状態集約は launcher と共通の `StackSupervisor` を使い、30 チャンネルをタイル表示します。
 
 ```bash
 python3 -m app          # または ./std_t98_gui.py
 ```
 
-PyQt5 が必要です（GNU Radio の Qt GUI に含まれるため、RF 環境が入っていれば追加インストールは不要）。ウィンドウの Start / Stop でスタックを起動・停止し、`--replay` などの backend 引数は「Backend」欄に入力できます。子プロセスが終了した場合は理由を表示します。
+PyQt5 が必要です（GNU Radio の Qt GUI に含まれるため、RF 環境が入っていれば追加インストールは不要）。ウィンドウの Start / Stop でスタックを起動・停止し、子プロセスが終了した場合は理由を表示します。
+
+設定は折りたたみ式の Settings パネルで扱います（Start すると自動的に畳まれます）。
+
+- **Config**: backend の TOML を選択（Browse）。`STD_T98_BACKEND_CONFIG` があれば初期値として拾い、以降は前回のパスを記憶します。選んだ設定は `--dry-run` と同じ内容（driver / レート / 同調周波数 / アンテナ / 帯域 など）をその場でプレビューし、ファイルが無ければ起動前に警告します。
+- **Detect SDRs**: 接続中の SoapySDR デバイスを一覧し、設定の driver が実際に繋がっているかを確認します。
+- **Backend**: `--replay` などの追加引数を渡せます（`--config` の後に付与）。
 
 主な launcher オプション:
 
