@@ -134,6 +134,16 @@ python3 std_t98_multi_service_launcher.py
 
 送信を受けると、該当チャンネルの行が `RX: [OPEN]` になり、復調・復号された音声が再生されます。複数チャンネルで同時に送信があれば、それぞれ独立に処理されます。停止は `Ctrl+C` です。
 
+### デスクトップ GUI
+
+launcher と同じスタックを、端末ではなく GUI で起動・監視できます。プロセスの起動・停止・状態集約は launcher と共通の `StackSupervisor` を使い、30 チャンネルをタイル表示します。SDR 設定は launcher と同じく設定ファイル／環境変数で渡します。
+
+```bash
+python3 -m app          # または ./std_t98_gui.py
+```
+
+PyQt5 が必要です（GNU Radio の Qt GUI に含まれるため、RF 環境が入っていれば追加インストールは不要）。ウィンドウの Start / Stop でスタックを起動・停止し、`--replay` などの backend 引数は「Backend」欄に入力できます。子プロセスが終了した場合は理由を表示します。
+
 主な launcher オプション:
 
 | オプション | 説明 |

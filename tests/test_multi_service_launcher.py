@@ -131,7 +131,7 @@ def test_spawn_process_can_suppress_start_announcement(monkeypatch, capsys):
         )
         return SimpleNamespace(pid=4321)
 
-    monkeypatch.setattr("std_t98_multi_service_launcher.subprocess.Popen", fake_popen)
+    monkeypatch.setattr("core.pipeline.stack_supervisor.subprocess.Popen", fake_popen)
 
     # passthrough_output=True keeps the child on the terminal, so no capture
     # temp file is opened -- the point of this test is the announcement, not IO.
@@ -299,7 +299,7 @@ def test_python_supports_import_checks_runs_each_statement_separately(monkeypatc
         commands.append(command)
         return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr("std_t98_multi_service_launcher.subprocess.run", fake_run)
+    monkeypatch.setattr("core.pipeline.stack_supervisor.subprocess.run", fake_run)
 
     assert _python_supports_import_checks(Path("/tmp/python"), ("import sounddevice", "import torch")) is True
     assert commands == [
@@ -313,7 +313,7 @@ def test_python_supports_import_checks_returns_false_on_timeout(monkeypatch):
         del stdout, stderr, check
         raise subprocess.TimeoutExpired(command, timeout)
 
-    monkeypatch.setattr("std_t98_multi_service_launcher.subprocess.run", fake_run)
+    monkeypatch.setattr("core.pipeline.stack_supervisor.subprocess.run", fake_run)
 
     assert _python_supports_import_checks(Path("/tmp/python"), ("import sounddevice",)) is False
 
@@ -326,7 +326,7 @@ def test_python_supports_import_checks_uses_timeout(monkeypatch):
         timeouts.append(timeout)
         return SimpleNamespace(returncode=0)
 
-    monkeypatch.setattr("std_t98_multi_service_launcher.subprocess.run", fake_run)
+    monkeypatch.setattr("core.pipeline.stack_supervisor.subprocess.run", fake_run)
 
     assert _python_supports_import_checks(Path("/tmp/python"), ("import sounddevice",)) is True
     assert timeouts == [IMPORT_CHECK_TIMEOUT_SEC]

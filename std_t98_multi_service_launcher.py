@@ -3,25 +3,32 @@
 
 import argparse
 import contextlib
-import os
-import signal
-import shutil
-import subprocess
-import tempfile
 import sys
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 from core.pipeline.multi_stack_dashboard import (
-    ChannelView,
-    ProcessView,
     build_stack_dashboard_renderable,
     print_stack_dashboard,
     rich_dashboard_available,
 )
-from ipc.message_schema import STATUS_SOURCE_AUDIO, STATUS_SOURCE_PROTOCOL, STATUS_SOURCE_RF, STATUS_SOURCE_SECRET, StatusPacket
-from ipc.transport.uds_seqpacket import UdsSeqpacketReceiver, resolve_status_socket_path
+from core.pipeline.stack_supervisor import (
+    BACKEND_IMPORT_CHECKS,
+    IMPORT_CHECK_CODE,
+    IMPORT_CHECK_TIMEOUT_SEC,
+    SERVICE_IMPORT_CHECKS,
+    SOURCE_PROCESS_NAMES,
+    ProcessSpec,
+    StackSupervisor,
+    _apply_service_payload,
+    _apply_status_payload,
+    _python_supports_import_checks,
+    _resolve_python,
+    _spawn_process,
+    _tail_log,
+    _terminate_processes,
+    build_process_specs,
+)
 
 try:
     from rich.console import Console
@@ -30,62 +37,19 @@ except ModuleNotFoundError:
     Console = None
     Live = None
 
-
-BACKEND_IMPORT_CHECKS = ("from gnuradio import gr", "from gnuradio import soapy")
-SERVICE_IMPORT_CHECKS = (
-    "import pyambelib",
-    "import sounddevice",
-    "import torch",
-    "from safetensors.torch import load_file",
-)
-IMPORT_CHECK_CODE = (
-    "import sys\n"
-    "for statement in sys.argv[1:]:\n"
-    "    try:\n"
-    "        exec(statement, {})\n"
-    "    except Exception:\n"
-    "        sys.exit(1)\n"
-    "sys.exit(0)\n"
-)
-IMPORT_CHECK_TIMEOUT_SEC = 5.0
-SOURCE_PROCESS_NAMES = {
-    STATUS_SOURCE_PROTOCOL: "protocol",
-    STATUS_SOURCE_AUDIO: "audio",
-    STATUS_SOURCE_SECRET: "secret",
-    STATUS_SOURCE_RF: "backend",
-}
-
-
-@dataclass(frozen=True)
-class ProcessSpec:
-    name: str
-    python_executable: Path
-    script_path: Path
-    args: tuple[str, ...] = ()
-
-
-def _terminate_processes(processes):
-    for process in processes:
-        if process.poll() is None:
-            process.send_signal(signal.SIGINT)
-
-    for process in processes:
-        if process.poll() is not None:
-            continue
-        try:
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
-
-    for process in processes:
-        if process.poll() is not None:
-            continue
-        try:
-            process.terminate()
-            process.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
+# Re-exported so existing imports of these names from the launcher module keep
+# working; the implementations now live in core.pipeline.stack_supervisor.
+__all__ = [
+    "BACKEND_IMPORT_CHECKS",
+    "IMPORT_CHECK_CODE",
+    "IMPORT_CHECK_TIMEOUT_SEC",
+    "SERVICE_IMPORT_CHECKS",
+    "SOURCE_PROCESS_NAMES",
+    "ProcessSpec",
+    "StackSupervisor",
+    "build_process_specs",
+    "main",
+]
 
 
 def _parse_args(argv=None):
@@ -130,223 +94,6 @@ def _parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-def _existing_candidates(candidate_paths):
-    resolved = []
-    seen = set()
-    for candidate in candidate_paths:
-        if not candidate:
-            continue
-        path = Path(candidate).expanduser()
-        key = str(path)
-        if key in seen:
-            continue
-        seen.add(key)
-        if path.exists():
-            resolved.append(path)
-    return resolved
-
-
-def _python_supports_import_checks(python_executable, import_checks):
-    for import_check in import_checks:
-        try:
-            result = subprocess.run(
-                [str(python_executable), "-c", IMPORT_CHECK_CODE, import_check],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-                timeout=IMPORT_CHECK_TIMEOUT_SEC,
-            )
-        except subprocess.TimeoutExpired:
-            return False
-
-        if result.returncode != 0:
-            return False
-
-    return True
-
-
-def _resolve_python(override, candidate_paths, import_checks, role_name):
-    candidates = _existing_candidates(([override] if override else []) + list(candidate_paths))
-    for candidate in candidates:
-        if _python_supports_import_checks(candidate, import_checks):
-            return candidate
-
-    searched = ", ".join(str(candidate) for candidate in candidates) or "<none>"
-    raise RuntimeError(
-        f"Could not find a Python interpreter for {role_name} with required imports {import_checks}. "
-        f"Searched: {searched}"
-    )
-
-
-def build_process_specs(repo_root, service_python, status_socket_path=None, backend_python=None, include_backend=True, backend_args=()):
-    service_python = Path(service_python)
-    process_specs = [
-        ProcessSpec(
-            "protocol",
-            service_python,
-            repo_root / "std_t98_multi_protocol_service.py",
-            args=("--headless", "--status-socket", status_socket_path) if status_socket_path else ("--headless",),
-        ),
-        ProcessSpec(
-            "secret",
-            service_python,
-            repo_root / "std_t98_multi_secret_service.py",
-            args=("--headless", "--status-socket", status_socket_path) if status_socket_path else ("--headless",),
-        ),
-        ProcessSpec(
-            "audio",
-            service_python,
-            repo_root / "std_t98_multi_audio_service.py",
-            args=("--headless", "--status-socket", status_socket_path) if status_socket_path else ("--headless",),
-        ),
-    ]
-
-    if include_backend:
-        if backend_python is None:
-            raise ValueError("backend_python is required when include_backend is True")
-        process_specs.append(ProcessSpec(
-            "backend", Path(backend_python),
-            repo_root / "std_t98_30ch_multi_rf_backend.py",
-            args=tuple(backend_args),
-        ))
-
-    return process_specs
-
-
-def _spawn_process(process_spec, passthrough_output=False, announce_start=False):
-    child_env = os.environ.copy()
-    child_env["PYTHONUNBUFFERED"] = "1"
-    log_file = None
-    if passthrough_output:
-        stdout = None
-        stderr = None
-    else:
-        # Not DEVNULL: keep the output so a non-zero exit can be explained.
-        log_file = tempfile.NamedTemporaryFile(
-            mode="w+", prefix=f"std-t98-{process_spec.name}-", suffix=".log")
-        stdout = log_file
-        stderr = subprocess.STDOUT
-    process = subprocess.Popen(
-        [str(process_spec.python_executable), str(process_spec.script_path), *process_spec.args],
-        cwd=process_spec.script_path.parent,
-        env=child_env,
-        stdout=stdout,
-        stderr=stderr,
-    )
-    if announce_start:
-        print(
-            f"Started {process_spec.name} with {process_spec.python_executable} "
-            f"(pid {process.pid})"
-        )
-    return process, log_file
-
-
-def _tail_log(log_file, max_lines=8):
-    """Last few non-empty lines of a captured child log, for a crash message."""
-    if log_file is None:
-        return ""
-    try:
-        log_file.flush()
-        log_file.seek(0)
-        lines = [line.rstrip() for line in log_file if line.strip()]
-    except Exception:
-        return ""
-    return "\n".join(lines[-max_lines:])
-
-
-def _apply_status_payload(channels, source, channel_id, payload_dict):
-    if payload_dict.get("event") != "channel_state":
-        return False
-
-    channel = channels.setdefault(channel_id, ChannelView(channel_id=channel_id))
-    changed = False
-
-    if source == STATUS_SOURCE_PROTOCOL:
-        for field_name, payload_key in (
-            ("rx_status", "rx_status"),
-            ("protocol_status", "protocol_status"),
-            ("csm", "csm"),
-            ("sacch", "sacch"),
-            ("protocol_debug", "protocol_debug"),
-        ):
-            new_value = payload_dict.get(payload_key, getattr(channel, field_name))
-            if getattr(channel, field_name) != new_value:
-                setattr(channel, field_name, new_value)
-                changed = True
-
-        if channel.rx_status == "CLOSE" or channel.protocol_status in ("Idle", "Sync Burst"):
-            if channel.audio_status != "Idle":
-                channel.audio_status = "Idle"
-                changed = True
-            if channel.secret_status != "Idle":
-                channel.secret_status = "Idle"
-                changed = True
-    elif source == STATUS_SOURCE_AUDIO:
-        new_audio_status = payload_dict.get("audio_status", channel.audio_status)
-        if channel.audio_status != new_audio_status:
-            channel.audio_status = new_audio_status
-            changed = True
-
-        new_audio_debug = payload_dict.get("audio_debug", channel.audio_debug)
-        if channel.audio_debug != new_audio_debug:
-            channel.audio_debug = new_audio_debug
-            changed = True
-
-        new_secret_status = payload_dict.get("secret_status", channel.secret_status)
-        if channel.secret_status != new_secret_status:
-            channel.secret_status = new_secret_status
-            changed = True
-
-        new_secret_key = payload_dict.get("secret_key", channel.secret_key)
-        if channel.secret_key != new_secret_key:
-            channel.secret_key = new_secret_key
-            changed = True
-    elif source == STATUS_SOURCE_SECRET:
-        new_secret_status = payload_dict.get("secret_status", channel.secret_status)
-        if channel.secret_status != new_secret_status:
-            channel.secret_status = new_secret_status
-            changed = True
-
-        new_secret_key = payload_dict.get("secret_key", channel.secret_key)
-        if channel.secret_key != new_secret_key:
-            channel.secret_key = new_secret_key
-            changed = True
-
-        new_secret_cache_keys = tuple(payload_dict.get("secret_cache_keys", channel.secret_cache_keys))
-        if channel.secret_cache_keys != new_secret_cache_keys:
-            channel.secret_cache_keys = new_secret_cache_keys
-            changed = True
-    elif source == STATUS_SOURCE_RF:
-        new_rf_debug = payload_dict.get("rf_debug", channel.rf_debug)
-        if channel.rf_debug != new_rf_debug:
-            channel.rf_debug = new_rf_debug
-            changed = True
-
-    if changed:
-        channel.last_update = time.time()
-    return changed
-
-
-def _apply_service_payload(process_views_by_name, source, payload_dict):
-    if payload_dict.get("event") != "service_metrics":
-        return False
-
-    process_name = SOURCE_PROCESS_NAMES.get(source)
-    if process_name is None:
-        return False
-
-    process_view = process_views_by_name.get(process_name)
-    if process_view is None:
-        return False
-
-    summary = payload_dict.get("summary", "")
-    if process_view.detail == summary:
-        return False
-
-    process_view.detail = summary
-    return True
-
-
 def _should_use_rich_dashboard(args):
     return (
         Live is not None
@@ -360,76 +107,50 @@ def _should_use_rich_dashboard(args):
 def main(argv=None):
     args = _parse_args(argv)
     repo_root = Path(__file__).resolve().parent
-    service_python = _resolve_python(
-        override=args.service_python,
-        candidate_paths=[
-            repo_root / "env/bin/python",
-            sys.executable,
-            shutil.which("python3"),
-            shutil.which("python"),
-            "/usr/bin/python",
-        ],
-        import_checks=SERVICE_IMPORT_CHECKS,
-        role_name="protocol/audio services",
-    )
 
-    backend_python = None
-    if not args.services_only:
-        backend_python = _resolve_python(
-            override=args.backend_python,
-            candidate_paths=[
-                "/usr/bin/python",
-                sys.executable,
-                shutil.which("python3"),
-                shutil.which("python"),
-            ],
-            import_checks=BACKEND_IMPORT_CHECKS,
-            role_name="RF backend",
-        )
-
-    status_socket_path = resolve_status_socket_path(channel_count=30)
-
-    process_specs = build_process_specs(
+    supervisor = StackSupervisor(
         repo_root=repo_root,
-        service_python=service_python,
-        status_socket_path=status_socket_path,
-        backend_python=backend_python,
-        include_backend=not args.services_only,
+        services_only=args.services_only,
         backend_args=args.backend_arg,
+        service_python=args.service_python,
+        backend_python=args.backend_python,
+        passthrough_output=args.passthrough_output,
     )
+    supervisor.resolve()
 
     if args.dry_run:
-        for process_spec in process_specs:
-            extra = " ".join(process_spec.args)
-            if extra:
-                print(f"{process_spec.name}: {process_spec.python_executable} {process_spec.script_path} {extra}")
-            else:
-                print(f"{process_spec.name}: {process_spec.python_executable} {process_spec.script_path}")
+        for line in supervisor.dry_run_lines():
+            print(line)
         return 0
 
-    status_receiver = UdsSeqpacketReceiver(status_socket_path)
-
-    processes = []
-    process_logs = {}
-    exit_code = 0
-    process_views = []
-    channels = {}
+    process_views = supervisor.process_views
+    channels = supervisor.channels
+    mode_label = supervisor.mode_label
     use_rich_dashboard = _should_use_rich_dashboard(args)
-    process_exit_message = None
     stopped_by_user = False
-
-    for process_spec in process_specs:
-        process_views.append(
-            ProcessView(
-                name=process_spec.name,
-                python_executable=str(process_spec.python_executable),
-                script_name=process_spec.script_path.name,
-            )
-        )
-
-    mode_label = "services-only" if args.services_only else "full-stack"
     printed_lines = 0
     live_dashboard = None
+
+    def render(refresh_live):
+        nonlocal printed_lines
+        if refresh_live is not None:
+            refresh_live.update(
+                build_stack_dashboard_renderable(
+                    processes=process_views,
+                    channels=channels,
+                    mode_label=mode_label,
+                    show_debug_metrics=args.show_debug_metrics,
+                ),
+                refresh=True,
+            )
+        else:
+            printed_lines = print_stack_dashboard(
+                processes=process_views,
+                channels=channels,
+                num_lines_last_time=printed_lines,
+                mode_label=mode_label,
+                show_debug_metrics=args.show_debug_metrics,
+            )
 
     if use_rich_dashboard:
         assert Live is not None
@@ -455,102 +176,34 @@ def main(argv=None):
         )
 
     with live_dashboard if live_dashboard is not None else contextlib.nullcontext() as live:
-        for process_spec, process_view in zip(process_specs, process_views):
-            process, log_file = _spawn_process(
-                process_spec,
-                passthrough_output=args.passthrough_output,
-                announce_start=False,
-            )
-            processes.append((process_spec.name, process))
-            process_logs[process_spec.name] = log_file
-            process_view.pid = process.pid
-            process_view.state = "RUNNING"
-
-        if live is not None:
-            live.update(
-                build_stack_dashboard_renderable(
-                    processes=process_views,
-                    channels=channels,
-                    mode_label=mode_label,
-                    show_debug_metrics=args.show_debug_metrics,
-                ),
-                refresh=True,
-            )
-        else:
-            printed_lines = print_stack_dashboard(
-                processes=process_views,
-                channels=channels,
-                num_lines_last_time=printed_lines,
-                mode_label=mode_label,
-                show_debug_metrics=args.show_debug_metrics,
-            )
-
-        process_views_by_name = {process_view.name: process_view for process_view in process_views}
+        supervisor.start()
+        render(live)
 
         try:
             while True:
-                dashboard_changed = False
-
-                payload = status_receiver.recv(timeout_ms=100)
-                while payload is not None:
-                    packet = StatusPacket.decode(payload)
-                    payload_dict = packet.to_dict()
-                    dashboard_changed = _apply_service_payload(process_views_by_name, packet.source, payload_dict) or dashboard_changed
-                    dashboard_changed = _apply_status_payload(channels, packet.source, packet.channel_id, payload_dict) or dashboard_changed
-                    payload = status_receiver.recv(timeout_ms=0)
-
-                for name, process in processes:
-                    return_code = process.poll()
-                    process_view = next(view for view in process_views if view.name == name)
-                    if return_code is not None:
-                        process_view.state = "EXITED"
-                        exit_code = return_code or 1
-                        process_exit_message = f"{name} service exited with status {return_code}"
-                        tail = _tail_log(process_logs.get(name))
-                        if tail:
-                            process_exit_message += f"\n{tail}"
-                        dashboard_changed = True
-                        break
-                    if process_view.state != "RUNNING":
-                        process_view.state = "RUNNING"
-                        dashboard_changed = True
+                changed = supervisor.poll(timeout_ms=100)
 
                 if live is not None:
-                    live.update(
-                        build_stack_dashboard_renderable(
-                            processes=process_views,
-                            channels=channels,
-                            mode_label=mode_label,
-                            show_debug_metrics=args.show_debug_metrics,
-                        ),
-                        refresh=True,
-                    )
-                elif dashboard_changed:
-                    printed_lines = print_stack_dashboard(
-                        processes=process_views,
-                        channels=channels,
-                        num_lines_last_time=printed_lines,
-                        mode_label=mode_label,
-                        show_debug_metrics=args.show_debug_metrics,
-                    )
+                    render(live)
+                elif changed:
+                    render(None)
 
-                if process_exit_message is not None:
+                if supervisor.exit_message is not None:
                     break
 
                 time.sleep(0.2)
         except KeyboardInterrupt:
             stopped_by_user = True
         finally:
-            status_receiver.close()
-            _terminate_processes([process for _, process in processes])
+            supervisor.stop()
 
     if stopped_by_user:
         print("\nStopping split multi-channel services...")
 
-    if process_exit_message is not None:
-        print(process_exit_message, file=sys.stderr)
+    if supervisor.exit_message is not None:
+        print(supervisor.exit_message, file=sys.stderr)
 
-    return exit_code
+    return supervisor.exit_code
 
 
 if __name__ == "__main__":
