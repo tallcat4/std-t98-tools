@@ -114,27 +114,30 @@ Linux 専用です（IPC に `AF_UNIX` の `SOCK_SEQPACKET` を使います）�
 
 秘話系は**任意**です。audio service は secret service が起動しているかを自動判定し、無ければクリア音声だけを復号・再生します（暗号化された通信はスクランブルされたまま）。クリア音声だけ聞ければよいなら `torch` は不要です。
 
-GNU Radio と SoapySDR は PyPI からは入りません。ディストリのパッケージか radioconda を使ってください。
+### 手早く始める
+
+GNU Radio と SoapySDR だけは PyPI に無いので、先にディストリのパッケージ（か radioconda）で入れます。SDR 本体のモジュールは使う機種のものだけで十分です。
 
 ```bash
-# Debian / Ubuntu の例（使う SDR の module だけ入れれば十分です）
-sudo apt install gnuradio libsoapysdr0.8 soapysdr-tools \
+# Debian / Ubuntu の例
+sudo apt install gnuradio libsoapysdr0.8 soapysdr-tools libportaudio2 \
     soapysdr-module-rtlsdr soapysdr-module-uhd soapysdr-module-hackrf
-pip install -r requirements-rf.txt
-
-# 音声系（別環境でも可）
-sudo apt install libportaudio2
-pip install -r requirements-audio.txt
 ```
 
-`pyambelib` は PyPI に無いため `requirements-audio.txt` には含めていません。C コンパイラと Python ヘッダだけでビルドできます（mbelib-neo の C ソースを同梱しているので外部ライブラリは不要です）。
+あとは `setup.sh` が service 用の `env/` を作り、音声系と `pyambelib`（ソースからビルド）を入れ、RF 系が使えるかを確認します。root は不要で、システム Python には触れません。再実行しても安全です。
+
+```bash
+./setup.sh                 # 音声まで
+./setup.sh --with-secret   # 秘話解読(torch)も入れる
+./setup.sh --with-dev      # テスト用に pytest も入れる
+```
+
+手動で入れる場合や各依存の詳細は下記のとおりです。RF 系は `pip install -r requirements-rf.txt`、音声系は `pip install -r requirements-audio.txt`。`pyambelib` は PyPI に無いので別途ビルドします（C コンパイラと Python ヘッダのみ、mbelib-neo の C ソースを同梱）。
 
 ```bash
 git clone https://github.com/tallcat4/pyambelib
 ./env/bin/pip install ./pyambelib
 ```
-
-未導入でも音声復号以外は動作します。
 
 `rich` が入っていると launcher dashboard は安定した live 描画を使います。未導入時は簡易表示へフォールバックします。
 
