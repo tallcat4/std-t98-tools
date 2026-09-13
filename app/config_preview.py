@@ -77,6 +77,53 @@ def preview_config(path) -> ConfigPreview:
 
 
 @dataclass
+class DevicePreset:
+    path: Path
+    name: str
+    description: str = ""
+
+
+def _read_preset_header(path: Path):
+    """(name, description) from a preset's leading comment lines.
+
+    The first comment line is the display name; the rest form the description.
+    Presets are plain backend TOML (the loader rejects a ``[meta]`` section), so
+    this comment header is how a preset labels itself for the GUI.
+    """
+    comments = []
+    try:
+        with open(path, encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    if comments:
+                        break
+                    continue
+                if stripped.startswith("#"):
+                    comments.append(stripped.lstrip("#").strip())
+                    continue
+                break  # first TOML content line ends the header
+    except OSError:
+        return path.stem, ""
+
+    if not comments:
+        return path.stem, ""
+    return comments[0], " ".join(comments[1:])
+
+
+def list_device_presets(devices_dir) -> list[DevicePreset]:
+    """Device presets found in ``devices_dir``, sorted by filename."""
+    directory = Path(devices_dir)
+    if not directory.is_dir():
+        return []
+    presets = []
+    for path in sorted(directory.glob("*.toml")):
+        name, description = _read_preset_header(path)
+        presets.append(DevicePreset(path=path, name=name, description=description))
+    return presets
+
+
+@dataclass
 class SdrDevice:
     driver: str = ""
     label: str = ""

@@ -1,0 +1,10 @@
+# RTL-SDR
+# RTL2832U dongles over the rtlsdr SoapySDR driver. These values are also the
+# backend's built-in defaults, so this preset mainly serves as a second example
+# of the format. freq_err_offset is per-unit; measure and add it in your copy.
+[sdr]
+driver = "rtlsdr"
+sample_rate = 1200000
+
+[demod]
+squelch_threshold = -25

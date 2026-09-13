@@ -15,7 +15,7 @@ from pathlib import Path
 
 from PyQt5 import QtCore, QtWidgets
 
-from app.config_preview import detect_sdrs, preview_config
+from app.config_preview import detect_sdrs, list_device_presets, preview_config
 from core.pipeline.multi_stack_dashboard import (
     ChannelView,
     _format_csm,
@@ -185,7 +185,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._build_ui()
         self._apply_stylesheet()
         self._set_running(False)
-        self._update_preview()
+        self._on_config_path_changed()
 
     # --- UI construction ---------------------------------------------------
     def _build_ui(self):
@@ -229,10 +229,27 @@ class MainWindow(QtWidgets.QMainWindow):
         panel = QtWidgets.QVBoxLayout(self._settings_panel)
         panel.setContentsMargins(0, 0, 0, 0)
 
+        # Device preset picker: choosing a device fills in the config path.
+        self._syncing_device = False
+        device_row = QtWidgets.QHBoxLayout()
+        self._device_combo = QtWidgets.QComboBox()
+        self._device_combo.addItem("(custom)", None)
+        for preset in list_device_presets(self.repo_root / "devices"):
+            self._device_combo.addItem(preset.name, str(preset.path))
+            if preset.description:
+                self._device_combo.setItemData(
+                    self._device_combo.count() - 1, preset.description, QtCore.Qt.ToolTipRole
+                )
+        self._device_combo.currentIndexChanged.connect(self._on_device_selected)
+        device_row.addWidget(QtWidgets.QLabel("Device:"))
+        device_row.addWidget(self._device_combo)
+        device_row.addStretch(1)
+        panel.addLayout(device_row)
+
         config_row = QtWidgets.QHBoxLayout()
         self._config_path = QtWidgets.QLineEdit(self._initial_config_path)
         self._config_path.setPlaceholderText("(no config — built-in RTL-SDR defaults)")
-        self._config_path.textChanged.connect(self._update_preview)
+        self._config_path.textChanged.connect(self._on_config_path_changed)
         self._browse_button = QtWidgets.QPushButton("Browse…")
         self._browse_button.clicked.connect(self._browse_config)
         self._detect_button = QtWidgets.QPushButton("Detect SDRs")
@@ -342,6 +359,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._config_path.setEnabled(not running)
         self._browse_button.setEnabled(not running)
         self._detect_button.setEnabled(not running)
+        self._device_combo.setEnabled(not running)
 
     # --- settings panel ----------------------------------------------------
     def _on_settings_toggled(self, checked):
@@ -349,6 +367,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self._settings_toggle.setArrowType(
             QtCore.Qt.DownArrow if checked else QtCore.Qt.RightArrow
         )
+
+    def _on_config_path_changed(self):
+        self._update_preview()
+        self._sync_device_combo()
+
+    def _on_device_selected(self, _index):
+        if self._syncing_device:
+            return
+        path = self._device_combo.currentData()
+        if path:
+            self._config_path.setText(path)
+
+    def _sync_device_combo(self):
+        """Point the Device combo at the preset matching the config path, else custom."""
+        text = self._config_path.text().strip()
+        current = os.path.abspath(os.path.expanduser(text)) if text else ""
+        index = 0  # "(custom)"
+        if current:
+            for candidate in range(1, self._device_combo.count()):
+                data = self._device_combo.itemData(candidate)
+                if data and os.path.abspath(data) == current:
+                    index = candidate
+                    break
+        self._syncing_device = True
+        self._device_combo.setCurrentIndex(index)
+        self._syncing_device = False
 
     def _update_preview(self):
         # In services-only mode the RF backend is started elsewhere, so the

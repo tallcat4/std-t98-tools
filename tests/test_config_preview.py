@@ -1,6 +1,10 @@
 from textwrap import dedent
 
-from app.config_preview import parse_soapy_find, preview_config
+from app.config_preview import (
+    list_device_presets,
+    parse_soapy_find,
+    preview_config,
+)
 
 
 def _write(tmp_path, text):
@@ -41,6 +45,38 @@ def test_preview_resolves_uhd_config(tmp_path):
     assert "+1030 Hz" in result.summary
     assert "2,000,000 Hz" in result.summary
     assert result.warnings == []
+
+
+def test_list_device_presets_reads_comment_header(tmp_path):
+    (tmp_path / "b.toml").write_text(dedent("""
+        # USRP B210
+        # Ettus/LibreSDR B210 over uhd.
+        [sdr]
+        driver = "uhd"
+    """))
+    (tmp_path / "a.toml").write_text('[sdr]\ndriver = "rtlsdr"\n')
+
+    presets = list_device_presets(tmp_path)
+    # sorted by filename: a.toml (no header -> stem), b.toml (header)
+    assert [p.path.name for p in presets] == ["a.toml", "b.toml"]
+    assert presets[0].name == "a"
+    assert presets[1].name == "USRP B210"
+    assert presets[1].description == "Ettus/LibreSDR B210 over uhd."
+
+
+def test_list_device_presets_missing_dir_is_empty(tmp_path):
+    assert list_device_presets(tmp_path / "nope") == []
+
+
+def test_shipped_presets_load(tmp_path):
+    # The repo's presets must be valid, loadable backend configs.
+    from pathlib import Path
+
+    devices = Path(__file__).resolve().parent.parent / "devices"
+    presets = list_device_presets(devices)
+    assert {p.path.name for p in presets} >= {"usrp-b210.toml", "rtl-sdr.toml"}
+    for preset in presets:
+        assert preview_config(str(preset.path)).ok is True
 
 
 def test_parse_soapy_find_extracts_devices():

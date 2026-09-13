@@ -29,6 +29,24 @@ def test_channel_grid_has_fixed_thirty_cards(qapp):
     assert window._cards[29]._title.text() == "CH 30"
 
 
+def test_device_combo_lists_presets_and_sets_config_path(qapp):
+    window = MainWindow()
+    items = [window._device_combo.itemText(i) for i in range(window._device_combo.count())]
+    assert items[0] == "(custom)"
+    assert any("USRP B210" in text for text in items)
+
+    b210 = next(
+        i for i in range(window._device_combo.count())
+        if "USRP B210" in window._device_combo.itemText(i)
+    )
+    window._device_combo.setCurrentIndex(b210)
+    assert window._config_path.text().endswith("devices/usrp-b210.toml")
+
+    # Editing the path away from a preset falls back to "(custom)".
+    window._config_path.setText("/tmp/not-a-preset.toml")
+    assert window._device_combo.currentIndex() == 0
+
+
 def test_settings_panel_toggles(qapp):
     window = MainWindow()
     assert window._settings_panel.isVisibleTo(window) is True
