@@ -52,7 +52,10 @@ ARIB STD-T98（デジタル簡易無線, 351 MHz 帯）の信号を SDR で受�
 | RF 系 | backend / protocol | GNU Radio（`gnuradio.soapy` 込み）、SoapySDR + デバイスモジュール、numpy |
 | 音声系 | audio | sounddevice（+ PortAudio）、pyambelib、numpy |
 | 秘話系 | secret | torch、safetensors |
+| GUI | デスクトップ front-end | PyQt5 |
 | 開発 | テスト | pytest |
+
+GUI（デスクトップ front-end）は任意で、端末の launcher と同じスタックを起動・監視します。PyQt5 は GNU Radio の Qt GUI に含まれるため、RF 系が入っていれば追加インストールは不要です（端末の launcher だけで使う場合は PyQt5 も不要）。
 
 秘話系（音声スクランブルの解除）は標準機能で、`setup.sh` が既定で導入します。torch を入れたくない用途向けに `--no-secret` で外すこともでき、その場合 audio service は secret service の不在を自動判定してクリア音声のみを復号・再生します（暗号化通信はスクランブルされたまま）。
 
@@ -276,17 +279,21 @@ python3 std_t98_multi_service_launcher.py \
 
 ```
 std_t98_*.py            4 サービス + launcher
+std_t98_gui.py          デスクトップ GUI の起動口（= python -m app）
+app/                    PyQt5 front-end（メインウィンドウ、設定プレビュー）
 core/rf/                同期語相関、SDR 制御、レート導出
 core/protocol/          デホワイトニング、RICH/SACCH/PICH/TCH デコーダ
 core/audio/             pyambelib 連携、AMBE 変換、PCM 化
 core/crypto/            PN 系列生成、秘話解除
 core/secret/            秘話鍵探索とモデル利用
-core/pipeline/          dashboard・runtime status 共通処理
+core/pipeline/          スタック監視（StackSupervisor）・dashboard・runtime status 共通処理
 ipc/                    バイナリ schema と UDS transport
 tools/                  診断ツール（scope / record / analyse）
 models/secret_voice/    秘話鍵探索の学習済みモデル
 tests/                  回帰テスト
 ```
+
+launcher（端末）と GUI は、プロセスの起動・停止・状態集約を担う `core/pipeline/stack_supervisor.py` の `StackSupervisor` を共有します。表示方法が違うだけで、動かすスタックは同一です。
 
 ### IPC ソケット
 
@@ -313,6 +320,12 @@ python3 -m venv --system-site-packages .venv
 ```
 
 `tests/test_multi_audio_service.py` は音声系依存（sounddevice）を必要とします。RF 系のみの環境では `--ignore=tests/test_multi_audio_service.py` を付けてください。GNU Radio にも依存しないテストは `python3 -m unittest tests.test_backend_config` だけでも実行できます。音声系まで揃った環境なら `./env/bin/python -m pytest` でも同じものが回ります。
+
+GUI のテスト（`tests/test_gui_main_window.py`）は PyQt5 を要し、無い環境では自動でスキップされます。表示が無いマシンでも `QT_QPA_PLATFORM=offscreen` を付ければ回ります。設定プレビューのロジック（`tests/test_config_preview.py`）とスーパーバイザ（`tests/test_stack_supervisor.py`）は Qt も GNU Radio も不要です。
+
+```bash
+QT_QPA_PLATFORM=offscreen .venv/bin/python -m pytest tests -q
+```
 
 ## ライセンス
 
