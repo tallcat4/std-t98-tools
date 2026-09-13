@@ -47,7 +47,7 @@ from firdes import make_rx_taps
 
 
 class ChannelScope(gr.top_block, Qt.QWidget):
-    def __init__(self, config, channel, use_squelch):
+    def __init__(self, config, channel, use_squelch, eye_sps=None):
         gr.top_block.__init__(self, "STD-T98 Channel Scope", catch_exceptions=True)
         Qt.QWidget.__init__(self)
 
@@ -159,8 +159,17 @@ class ChannelScope(gr.top_block, Qt.QWidget):
         # passing two symbols' worth leaves the sink with too little to work
         # with and it draws the axes but never a trace. The display is always
         # two symbols wide, set by samp_per_symbol.
-        self.eye = qtgui.eye_sink_f(1024, demod_samp_rate, 1, None)
-        self.eye.set_samp_per_symbol(int(round(sps)))
+        # The chain runs at 62500/2400 = 26.0417 samples per symbol and the
+        # sink only takes an integer, so each 2-symbol trace ends 0.0032 of a
+        # symbol short of the last one and the traces walk sideways instead of
+        # overlaying into an eye. Resample the display tap -- and only the
+        # display tap -- onto an exact integer rate so successive traces land
+        # on top of each other.
+        self.eye_sps = eye_sps or int(round(sps))
+        eye_rate = baud_rate * self.eye_sps
+        self.eye_resamp = filter.mmse_resampler_ff(0.0, demod_samp_rate / eye_rate)
+        self.eye = qtgui.eye_sink_f(1024, eye_rate, 1, None)
+        self.eye.set_samp_per_symbol(self.eye_sps)
         # Wide enough that a signal riding on a frequency-error DC offset is
         # still fully visible, rather than clipped off the top.
         self.eye.set_y_axis(-2.0, 2.0)
@@ -192,7 +201,8 @@ class ChannelScope(gr.top_block, Qt.QWidget):
         self.connect((self.resamp2, 0), (self.quad_demod, 0))
         self.connect((self.quad_demod, 0), (self.rx_filter, 0))
         self.connect((self.rx_filter, 0), (self.filt_gain, 0))
-        self.connect((self.filt_gain, 0), (self.eye, 0))
+        self.connect((self.filt_gain, 0), (self.eye_resamp, 0))
+        self.connect((self.eye_resamp, 0), (self.eye, 0))
         self.connect((self.filt_gain, 0), (self.symbol_sync, 0))
         self.connect((self.symbol_sync, 0), (self.sync_gain, 0))
         self.connect((self.sync_gain, 0), (self.symbols, 0))
@@ -201,6 +211,10 @@ class ChannelScope(gr.top_block, Qt.QWidget):
         print(f"watching      ch{channel} (登録局 ch{channel+1}) = {channel_freq/1e6:.5f} MHz")
         print(f"demod rate    {demod_samp_rate:.0f} Hz, {sps:.4f} samples/symbol")
         print(f"squelch       {'on (-25 dB)' if use_squelch else 'bypassed'}")
+        print(f"eye           {self.eye_sps} samples/symbol, display resampled "
+              f"{demod_samp_rate:.0f} -> {eye_rate} Hz for a stable trace")
+        print(f"freq err      {sdr_cfg.resolved_freq_err_offset():+.0f} Hz "
+              f"-> tuned {sdr_cfg.tuned_freq()/1e6:.5f} MHz")
 
     def closeEvent(self, event):
         self.stop()
@@ -221,12 +235,17 @@ def main():
     parser.add_argument(
         "--no-squelch", dest="squelch", action="store_false", default=True,
         help="Bypass the squelch, so a weak signal is still visible.")
+    parser.add_argument(
+        "--eye-sps", type=int, default=None,
+        help="Samples per symbol for the eye display. Defaults to the chain's "
+        "rate rounded to an integer (26); the true rate is fractional, so the "
+        "eye drifts at that setting. A smaller value gives a stable picture.")
     args = parser.parse_args()
 
     config = load_config(args)
 
     qapp = Qt.QApplication(sys.argv)
-    tb = ChannelScope(config, args.channel, args.squelch)
+    tb = ChannelScope(config, args.channel, args.squelch, args.eye_sps)
     tb.start()
     tb.show()
 
