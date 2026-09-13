@@ -171,18 +171,26 @@ class ChannelScope(gr.top_block, Qt.QWidget):
         # with and it draws the axes but never a trace at all. The display is
         # always two symbols wide, set by samp_per_symbol.
         # The chain runs at 62500/2400 = 26.0417 samples per symbol and the
-        # sink only takes an integer, so each 2-symbol trace ends 0.0032 of a
-        # symbol short of the last one and the traces walk sideways instead of
-        # overlaying into an eye. Resample the display tap -- and only the
-        # display tap -- onto an exact integer rate so successive traces land
-        # on top of each other.
-        self.eye_sps = eye_sps or int(round(sps))
+        # sink only takes an integer, so traces walk sideways instead of
+        # overlaying. Resampling to a fixed integer rate is not enough either:
+        # the transmitter's symbol clock is not exactly 2400 baud (13.6 ppm
+        # high on the radio measured here), so any fixed ratio still drifts --
+        # 0.85 samples/s, a full trace width per minute. Drive the display from
+        # its own timing-recovery loop instead, which tracks whatever the
+        # symbol rate really is, and the eye stays put with no calibration.
+        self.eye_sps = eye_sps or 16
         eye_rate = baud_rate * self.eye_sps
-        self.eye_resamp = filter.mmse_resampler_ff(0.0, demod_samp_rate / eye_rate)
+        self.eye_sync = digital.symbol_sync_ff(
+            digital.TED_GARDNER, sps, 0.06, 1.1, 0.1, 0.02, self.eye_sps,
+            digital.constellation_bpsk().base(), digital.IR_MMSE_8TAP, 128, [])
         # Scale to the units the sync correlator works in, so the eye's levels
         # can be read directly against the sync word's +/-1 and +/-3 and match
         # the symbol plot beside it.
         self.eye_gain = blocks.multiply_const_ff(post_sync_gain)
+        # The loop puts a decision instant on sample 0, which splits the eye
+        # openings across the left and right edges of the trace. Half a symbol
+        # of delay moves them where they can be read.
+        self.eye_delay = blocks.delay(gr.sizeof_float, self.eye_sps // 2)
         # The buffer sets how many traces get overlaid, and an eye only takes
         # shape once enough of them accumulate to fill in every transition
         # path: at 1024 samples there are 20 traces and the picture reads as
@@ -226,9 +234,10 @@ class ChannelScope(gr.top_block, Qt.QWidget):
         self.connect((self.resamp2, 0), (self.quad_demod, 0))
         self.connect((self.quad_demod, 0), (self.rx_filter, 0))
         self.connect((self.rx_filter, 0), (self.filt_gain, 0))
-        self.connect((self.filt_gain, 0), (self.eye_resamp, 0))
-        self.connect((self.eye_resamp, 0), (self.eye_gain, 0))
-        self.connect((self.eye_gain, 0), (self.eye, 0))
+        self.connect((self.filt_gain, 0), (self.eye_sync, 0))
+        self.connect((self.eye_sync, 0), (self.eye_gain, 0))
+        self.connect((self.eye_gain, 0), (self.eye_delay, 0))
+        self.connect((self.eye_delay, 0), (self.eye, 0))
         self.connect((self.filt_gain, 0), (self.symbol_sync, 0))
         self.connect((self.symbol_sync, 0), (self.sync_gain, 0))
         self.connect((self.sync_gain, 0), (self.symbols, 0))
@@ -239,8 +248,8 @@ class ChannelScope(gr.top_block, Qt.QWidget):
         print(f"watching      ch{channel} (登録局 ch{channel+1}) = {channel_freq/1e6:.5f} MHz")
         print(f"demod rate    {demod_samp_rate:.0f} Hz, {sps:.4f} samples/symbol")
         print(f"squelch       {'on (-25 dB)' if use_squelch else 'bypassed'}")
-        print(f"eye           {self.eye_sps} samples/symbol, display resampled "
-              f"{demod_samp_rate:.0f} -> {eye_rate} Hz for a stable trace")
+        print(f"eye           {self.eye_sps} samples/symbol from its own "
+              f"timing loop ({eye_rate} Hz), so it does not drift")
         print(f"freq err      {sdr_cfg.resolved_freq_err_offset():+.0f} Hz "
               f"-> tuned {sdr_cfg.tuned_freq()/1e6:.5f} MHz")
 
@@ -269,9 +278,9 @@ def main():
         "the SDR. Lets a capture be examined without the radio.")
     parser.add_argument(
         "--eye-sps", type=int, default=None,
-        help="Samples per symbol for the eye display. Defaults to the chain's "
-        "rate rounded to an integer (26); the true rate is fractional, so the "
-        "eye drifts at that setting. A smaller value gives a stable picture.")
+        help="Samples per symbol for the eye display, produced by its own "
+        "timing-recovery loop (default 16). Higher is smoother, lower is "
+        "cheaper.")
     args = parser.parse_args()
 
     config = load_config(args)
