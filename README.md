@@ -242,7 +242,7 @@ python3 std_t98_30ch_multi_rf_backend.py --driver uhd --freq-err-offset 1030
 
 同じ電界強度でも、ある機種では -25 dB に、別の機種では -40 dB になります。閾値が高すぎると**全チャンネルが無音化され、しかも何の表示も出ません** — 周波数補正を誤ったときと同じ、「正常に動いているのに何も復号しない」症状になります。実測では B210 でゲイン 10 のとき -39.9 dB で、既定の -25 dB では同期検出が 0、-60 dB にすると 240 回検出しました。
 
-新しい SDR では `std_t98_analyse_capture.py` の出力レベルを見て決めるか、十分低い値から始めてください。
+新しい SDR では `std_t98_analyse_capture.py` でチャンネル電力を測り、それより十分低い値を設定してください。ゲインを上げて既定を満たす手もありますが、電力は送信距離や条件でも変わるため、閾値側に余裕を持たせる方が確実です。
 
 ### アンテナポート
 
@@ -378,6 +378,24 @@ frequency offset        +4 Hz (DC +0.02 on the symbol stream)
 symbol rate       2400.0311 baud (+13.0 ppm), phase drift +0.810 samples/s
 sync detections   267 (best SSE 0.25, threshold 14.8)
 ```
+
+### 録音でフルスタックを通す
+
+バックエンドの `--replay` を使えば、**SDR も送信も無しで 4 プロセス全体を検証**できます。移植先での受け入れテストとして使ってください。
+
+```bash
+# 3サービスを先に起動（audio は secret に接続するので secret も必要）
+./env/bin/python std_t98_multi_protocol_service.py --headless &
+./env/bin/python std_t98_multi_secret_service.py --headless &
+./env/bin/python std_t98_multi_audio_service.py &
+
+# 録音を再生
+python3 std_t98_30ch_multi_rf_backend.py --replay capture.cf32 --squelch -40
+```
+
+音声が再生されれば、RF 段から AMBE 復号・音声出力までの全経路が通っています。
+
+**起動順に注意してください。** audio service は voice / secret_request / secret_result の 3 ソケットに順に接続し、いずれも無限リトライします。secret service を起動していないと voice 接続後にブロックし、メインループに入りません（protocol の dashboard には `Traffic (no client)` と出ます）。
 
 ### 新しい SDR での周波数校正
 
