@@ -8,16 +8,23 @@ from PyQt5 import QtCore, QtWidgets
 
 from app.main_window import MainWindow
 
-# Qt's platform / input-method plugins (ibus, fcitx, ...) create a
-# QSocketNotifier during startup and print this exact line on some desktops. It
-# comes from the plugin, not from this app (we touch no sockets before Start and
-# use no QSocketNotifier), and it is harmless. Drop just that line; pass every
-# other Qt message through so real warnings stay visible.
-_BENIGN = "QSocketNotifier: Can only be used with threads started with QThread"
+# Harmless lines that Qt's platform / input-method plugins print on some
+# desktops (ibus/fcitx create a QSocketNotifier at startup; Wayland cannot honour
+# a window-activation request). They come from the plugin, not from this app --
+# we use no QSocketNotifier and never call requestActivate/activateWindow. Drop
+# exactly these; pass every other Qt message through so real warnings stay.
+_BENIGN = (
+    "QSocketNotifier: Can only be used with threads started with QThread",
+    "Wayland does not support QWindow::requestActivate()",
+)
+
+
+def _is_benign(message):
+    return any(line in message for line in _BENIGN)
 
 
 def _message_filter(mode, context, message):
-    if _BENIGN in message:
+    if _is_benign(message):
         return
     sys.stderr.write(message + "\n")
 
