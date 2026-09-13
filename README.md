@@ -43,7 +43,7 @@ ARIB STD-T98（デジタル簡易無線, 351 MHz 帯）の信号を SDR で受�
                                       PICH/TCH 解析)                  ミックス再生)
                                           │                              │
                                           └──────────── secret ◀────────┘
-                                             (秘話鍵の推定 / 任意)
+                                             (秘話鍵の推定)
 ```
 
 | プロセス | 役割 |
@@ -51,7 +51,7 @@ ARIB STD-T98（デジタル簡易無線, 351 MHz 帯）の信号を SDR で受�
 | `std_t98_30ch_multi_rf_backend.py` | SoapySDR で SDR を駆動し、PFB チャンネライザで 30ch を並列復調、シンボル同期・同期語検出まで行う |
 | `std_t98_multi_protocol_service.py` | フレームをデホワイトニングし、RICH / SACCH / PICH / TCH を解析 |
 | `std_t98_multi_audio_service.py` | 音声バーストを AMBE 復号し、PCM 化・チャネル間ミックス・再生 |
-| `std_t98_multi_secret_service.py` | 学習済みモデルで秘話鍵を推定（**任意**） |
+| `std_t98_multi_secret_service.py` | 学習済みモデルで秘話鍵を推定し、音声スクランブルを解除 |
 | `std_t98_multi_service_launcher.py` | 上記の起動・状態集約・dashboard 表示 |
 
 ## 動作環境
@@ -65,10 +65,10 @@ ARIB STD-T98（デジタル簡易無線, 351 MHz 帯）の信号を SDR で受�
 | --- | --- | --- |
 | RF 系 | backend / protocol | GNU Radio（`gnuradio.soapy` 込み）、SoapySDR + デバイスモジュール、numpy |
 | 音声系 | audio | sounddevice（+ PortAudio）、pyambelib、numpy |
-| 秘話系（任意） | secret | torch、safetensors |
+| 秘話系 | secret | torch、safetensors |
 | 開発 | テスト | pytest |
 
-秘話系は任意です。audio service は secret service の有無を自動判定し、無ければクリア音声のみを復号・再生します（暗号化通信はスクランブルされたまま）。クリア音声だけでよければ torch は不要です。
+秘話系（音声スクランブルの解除）は標準機能で、`setup.sh` が既定で導入します。torch を入れたくない用途向けに `--no-secret` で外すこともでき、その場合 audio service は secret service の不在を自動判定してクリア音声のみを復号・再生します（暗号化通信はスクランブルされたまま）。
 
 動作を確認済みの組み合わせ:
 
@@ -89,9 +89,9 @@ sudo apt install gnuradio libsoapysdr0.8 soapysdr-tools libportaudio2 \
 残りは `setup.sh` が用意します。service 用の `env/` を作り、音声系と `pyambelib`（ソースからビルド）を導入し、RF 系が使えるかを確認します。root は不要で、システム Python には触れず、再実行しても安全です。
 
 ```bash
-./setup.sh                 # 音声系まで
-./setup.sh --with-secret   # 秘話解読 (torch) も導入
-./setup.sh --with-dev      # 開発用に pytest も導入
+./setup.sh                 # 全機能（秘話解読の torch を含む）
+./setup.sh --no-secret     # 秘話解読 (torch) を省く
+./setup.sh --with-dev      # 開発用に pytest も追加
 ```
 
 <details>
@@ -110,7 +110,7 @@ python3 -m venv --system-site-packages env
 git clone https://github.com/tallcat4/pyambelib
 ./env/bin/pip install ./pyambelib
 
-# 秘話系（任意）
+# 秘話系
 ./env/bin/pip install -r requirements-secret.txt
 ```
 

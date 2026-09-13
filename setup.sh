@@ -11,22 +11,24 @@
 # touches the system Python or installs system packages, so it needs no root.
 # It is safe to re-run.
 #
-# Flags:
-#   --with-secret   also install torch + safetensors (voice descrambling)
-#   --with-dev      also install pytest
+# By default it installs everything needed for full operation, including the
+# secret (voice descrambling) stack. Flags:
+#   --no-secret   skip torch + safetensors (no voice descrambling)
+#   --with-dev    also install pytest
 #   --help
 
 set -euo pipefail
 cd "$(dirname "$0")"
 
-WITH_SECRET=0
+WITH_SECRET=1
 WITH_DEV=0
 for arg in "$@"; do
     case "$arg" in
-        --with-secret) WITH_SECRET=1 ;;
+        --no-secret) WITH_SECRET=0 ;;
+        --with-secret) WITH_SECRET=1 ;;   # accepted for symmetry; it is the default
         --with-dev) WITH_DEV=1 ;;
         --help|-h)
-            sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'
+            sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
             exit 0 ;;
         *) echo "unknown option: $arg" >&2; exit 1 ;;
     esac
@@ -42,7 +44,7 @@ if python3 -c "from gnuradio import gr, soapy" 2>/dev/null; then
     echo "  GNU Radio + gnuradio.soapy: OK ($(python3 -c 'from gnuradio import gr; print(gr.version())'))"
 else
     warn "GNU Radio (with gnuradio.soapy) not found for system python3."
-    warn "Install it from your distro or radioconda; see README 動作要件."
+    warn "Install it from your distro or radioconda; see README 動作環境."
     rf_ok=0
 fi
 if command -v SoapySDRUtil >/dev/null 2>&1; then
@@ -80,6 +82,8 @@ if [[ "$WITH_SECRET" == 1 ]]; then
     say "Installing the secret (voice descrambling) stack -- torch, this is large"
     env/bin/pip install --quiet -r requirements-secret.txt \
         --extra-index-url https://download.pytorch.org/whl/cpu
+else
+    say "Skipping the secret stack (--no-secret): voice descrambling disabled"
 fi
 
 if [[ "$WITH_DEV" == 1 ]]; then
@@ -89,8 +93,8 @@ fi
 
 # --- verify -----------------------------------------------------------------
 say "Verifying the service venv"
-env/bin/python - <<'PY'
-import importlib
+WITH_SECRET="$WITH_SECRET" env/bin/python - <<'PY'
+import importlib, os
 ok = True
 for mod, label in [("numpy", "numpy"), ("sounddevice", "sounddevice (PortAudio)"),
                    ("pyambelib", "pyambelib")]:
@@ -100,12 +104,17 @@ for mod, label in [("numpy", "numpy"), ("sounddevice", "sounddevice (PortAudio)"
     except Exception as e:
         print(f"  {label}: FAIL -- {e}")
         ok = False
+want_secret = os.environ.get("WITH_SECRET") == "1"
 for mod in ("torch", "safetensors"):
     try:
         importlib.import_module(mod)
-        print(f"  {mod}: OK (secret service available)")
-    except Exception:
-        print(f"  {mod}: not installed (secret service disabled; --with-secret to add)")
+        print(f"  {mod}: OK")
+    except Exception as e:
+        if want_secret:
+            print(f"  {mod}: FAIL -- {e}")
+            ok = False
+        else:
+            print(f"  {mod}: not installed (--no-secret)")
 raise SystemExit(0 if ok else 1)
 PY
 
