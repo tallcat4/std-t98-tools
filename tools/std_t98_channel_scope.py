@@ -168,8 +168,8 @@ class ChannelScope(gr.top_block, Qt.QWidget):
 
         # The first argument is the working buffer, not the trace length --
         # passing two symbols' worth leaves the sink with too little to work
-        # with and it draws the axes but never a trace. The display is always
-        # two symbols wide, set by samp_per_symbol.
+        # with and it draws the axes but never a trace at all. The display is
+        # always two symbols wide, set by samp_per_symbol.
         # The chain runs at 62500/2400 = 26.0417 samples per symbol and the
         # sink only takes an integer, so each 2-symbol trace ends 0.0032 of a
         # symbol short of the last one and the traces walk sideways instead of
@@ -183,7 +183,11 @@ class ChannelScope(gr.top_block, Qt.QWidget):
         # can be read directly against the sync word's +/-1 and +/-3 and match
         # the symbol plot beside it.
         self.eye_gain = blocks.multiply_const_ff(post_sync_gain)
-        self.eye = qtgui.eye_sink_f(1024, eye_rate, 1, None)
+        # The buffer sets how many traces get overlaid, and an eye only takes
+        # shape once enough of them accumulate to fill in every transition
+        # path: at 1024 samples there are 20 traces and the picture reads as
+        # random squiggles, while 8192 gives about 157 and the openings appear.
+        self.eye = qtgui.eye_sink_f(8192, eye_rate, 1, None)
         self.eye.set_samp_per_symbol(self.eye_sps)
         # Room for the +/-3 outer levels and their overshoot, and for some
         # residual frequency-error DC on top.
