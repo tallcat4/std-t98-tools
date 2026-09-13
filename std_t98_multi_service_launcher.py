@@ -7,6 +7,7 @@ import os
 import signal
 import shutil
 import subprocess
+import tempfile
 import sys
 import time
 from dataclasses import dataclass
@@ -215,19 +216,42 @@ def build_process_specs(repo_root, service_python, status_socket_path=None, back
 def _spawn_process(process_spec, passthrough_output=False, announce_start=False):
     child_env = os.environ.copy()
     child_env["PYTHONUNBUFFERED"] = "1"
+    log_file = None
+    if passthrough_output:
+        stdout = None
+        stderr = None
+    else:
+        # Not DEVNULL: keep the output so a non-zero exit can be explained.
+        log_file = tempfile.NamedTemporaryFile(
+            mode="w+", prefix=f"std-t98-{process_spec.name}-", suffix=".log")
+        stdout = log_file
+        stderr = subprocess.STDOUT
     process = subprocess.Popen(
         [str(process_spec.python_executable), str(process_spec.script_path), *process_spec.args],
         cwd=process_spec.script_path.parent,
         env=child_env,
-        stdout=None if passthrough_output else subprocess.DEVNULL,
-        stderr=None if passthrough_output else subprocess.STDOUT,
+        stdout=stdout,
+        stderr=stderr,
     )
     if announce_start:
         print(
             f"Started {process_spec.name} with {process_spec.python_executable} "
             f"(pid {process.pid})"
         )
-    return process
+    return process, log_file
+
+
+def _tail_log(log_file, max_lines=8):
+    """Last few non-empty lines of a captured child log, for a crash message."""
+    if log_file is None:
+        return ""
+    try:
+        log_file.flush()
+        log_file.seek(0)
+        lines = [line.rstrip() for line in log_file if line.strip()]
+    except Exception:
+        return ""
+    return "\n".join(lines[-max_lines:])
 
 
 def _apply_status_payload(channels, source, channel_id, payload_dict):
@@ -386,6 +410,7 @@ def main(argv=None):
     status_receiver = UdsSeqpacketReceiver(status_socket_path)
 
     processes = []
+    process_logs = {}
     exit_code = 0
     process_views = []
     channels = {}
@@ -431,12 +456,13 @@ def main(argv=None):
 
     with live_dashboard if live_dashboard is not None else contextlib.nullcontext() as live:
         for process_spec, process_view in zip(process_specs, process_views):
-            process = _spawn_process(
+            process, log_file = _spawn_process(
                 process_spec,
                 passthrough_output=args.passthrough_output,
                 announce_start=False,
             )
             processes.append((process_spec.name, process))
+            process_logs[process_spec.name] = log_file
             process_view.pid = process.pid
             process_view.state = "RUNNING"
 
@@ -480,6 +506,9 @@ def main(argv=None):
                         process_view.state = "EXITED"
                         exit_code = return_code or 1
                         process_exit_message = f"{name} service exited with status {return_code}"
+                        tail = _tail_log(process_logs.get(name))
+                        if tail:
+                            process_exit_message += f"\n{tail}"
                         dashboard_changed = True
                         break
                     if process_view.state != "RUNNING":

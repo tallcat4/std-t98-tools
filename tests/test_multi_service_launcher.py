@@ -133,21 +133,26 @@ def test_spawn_process_can_suppress_start_announcement(monkeypatch, capsys):
 
     monkeypatch.setattr("std_t98_multi_service_launcher.subprocess.Popen", fake_popen)
 
-    process = _spawn_process(
+    # passthrough_output=True keeps the child on the terminal, so no capture
+    # temp file is opened -- the point of this test is the announcement, not IO.
+    process, log_file = _spawn_process(
         ProcessSpec(
             name="protocol",
             python_executable=Path("/tmp/service-python"),
             script_path=Path("/tmp/std-t98-tools/std_t98_multi_protocol_service.py"),
             args=("--headless",),
         ),
+        passthrough_output=True,
         announce_start=False,
     )
 
     captured = capsys.readouterr()
 
     assert process.pid == 4321
+    assert log_file is None
     assert captured.out == ""
     assert len(popen_calls) == 1
+    assert popen_calls[0]["stdout"] is None
 
 
 def test_terminate_processes_prefers_sigint_for_graceful_shutdown():
