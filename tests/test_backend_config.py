@@ -7,6 +7,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from core.rf.backend_config import (
     BackendConfig,
+    DemodConfig,
     ChannelizerConfig,
     SdrConfig,
     add_config_arguments,
@@ -134,6 +135,31 @@ class FreqErrOffsetTest(unittest.TestCase):
     def test_zero_disables_the_rtlsdr_default(self):
         sdr = SdrConfig(driver="rtlsdr", freq_err_offset=0)
         self.assertEqual(sdr.resolved_freq_err_offset(), 0.0)
+
+
+class SquelchTest(unittest.TestCase):
+    def test_default_matches_the_historical_value(self):
+        self.assertEqual(BackendConfig().demod.squelch_threshold, -25.0)
+
+    def test_cli_overrides_squelch(self):
+        import argparse
+
+        parser = argparse.ArgumentParser()
+        add_config_arguments(parser)
+        args = parser.parse_args(["--squelch", "-60"])
+        config = apply_cli_overrides(BackendConfig(), args)
+        self.assertEqual(config.demod.squelch_threshold, -60.0)
+
+    def test_squelch_survives_a_config_file(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cfg.toml"
+            path.write_text("[demod]\nsquelch_threshold = -55\n", encoding="utf-8")
+            config = load_config_file(path)
+        self.assertEqual(config.demod.squelch_threshold, -55.0)
+        # Untouched sections keep their defaults.
+        self.assertEqual(config.sdr.driver, "rtlsdr")
 
 
 class BandwidthTest(unittest.TestCase):

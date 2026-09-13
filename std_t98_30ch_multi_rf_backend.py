@@ -26,7 +26,7 @@ from core.rf.soapy_source import open_source
 
 class test3(gr.top_block):
 
-    def __init__(self, config: BackendConfig | None = None):
+    def __init__(self, config: BackendConfig | None = None, replay=None):
         gr.top_block.__init__(self, "Test 3", catch_exceptions=True)
         self.flowgraph_started = threading.Event()
 
@@ -71,8 +71,8 @@ class test3(gr.top_block):
         self.fsk_dev = fsk_dev = 315
         self.fm_demod_gain = fm_demod_gain = demod_samp_rate / (2 * math.pi * fsk_dev)
         
-        self.squelch_threshold = squelch_threshold = -25
-        self.squelch_alpha = squelch_alpha = 1
+        self.squelch_threshold = squelch_threshold = config.demod.squelch_threshold
+        self.squelch_alpha = squelch_alpha = config.demod.squelch_alpha
 
         ##################################################
         # 4. FSK & Timing Sync Parameters
@@ -123,15 +123,26 @@ class test3(gr.top_block):
         ##################################################
         # Blocks
         ##################################################
-        self._source = open_source(sdr_cfg)
-        self.soapy_source_0 = self._source.source
+        self.replay = replay
+        if replay:
+            # A recording from std_t98_record_iq.py is already past stage 1, so
+            # it joins the flowgraph at the channelizer. This lets the whole
+            # four-process stack be exercised on a machine with no SDR at all,
+            # deterministically and as often as needed.
+            self.file_source = blocks.file_source(
+                gr.sizeof_gr_complex, str(replay), False)
+            self.replay_throttle = blocks.throttle(
+                gr.sizeof_gr_complex, samp_rate_post_resamp1, True, 0)
+        else:
+            self._source = open_source(sdr_cfg)
+            self.soapy_source_0 = self._source.source
 
-        # Names kept for anything that reached into the flowgraph before the
-        # device handling moved into core.rf.soapy_source.
-        self.set_soapy_source_0_gain_mode = self._source.set_gain_mode
-        self.set_soapy_source_0_gain = self._source.set_gain
-        self.set_soapy_source_0_bias = self._source.set_bias
-        self.soapy_rtlsdr_source_0 = self.soapy_source_0
+            # Names kept for anything that reached into the flowgraph before
+            # the device handling moved into core.rf.soapy_source.
+            self.set_soapy_source_0_gain_mode = self._source.set_gain_mode
+            self.set_soapy_source_0_gain = self._source.set_gain
+            self.set_soapy_source_0_bias = self._source.set_bias
+            self.soapy_rtlsdr_source_0 = self.soapy_source_0
 
         self.blocks_throttle_1 = blocks.throttle(gr.sizeof_gr_complex*1, rf_samp_rate, True, throttle_max_items_per_block)
         self.blocks_freqshift_cc_0 = blocks.rotator_cc(rotator_phase_inc)
@@ -209,10 +220,14 @@ class test3(gr.top_block):
         ##################################################
         # Connections
         ##################################################
-        self.connect((self.soapy_source_0, 0), (self.blocks_throttle_1, 0))
-        self.connect((self.blocks_throttle_1, 0), (self.blocks_freqshift_cc_0, 0))
-        self.connect((self.blocks_freqshift_cc_0, 0), (self.rational_resampler_1, 0))
-        self.connect((self.rational_resampler_1, 0), (self.pfb_channelizer_ccf_0, 0))
+        if self.replay:
+            self.connect((self.file_source, 0), (self.replay_throttle, 0))
+            self.connect((self.replay_throttle, 0), (self.pfb_channelizer_ccf_0, 0))
+        else:
+            self.connect((self.soapy_source_0, 0), (self.blocks_throttle_1, 0))
+            self.connect((self.blocks_throttle_1, 0), (self.blocks_freqshift_cc_0, 0))
+            self.connect((self.blocks_freqshift_cc_0, 0), (self.rational_resampler_1, 0))
+            self.connect((self.rational_resampler_1, 0), (self.pfb_channelizer_ccf_0, 0))
 
         for ch in range(num_channels):
             self.connect((self.pfb_channelizer_ccf_0, ch), (self.simple_squelch[ch], 0))
@@ -241,6 +256,11 @@ def _parse_args(argv=None):
     )
     add_config_arguments(parser)
     parser.add_argument(
+        "--replay",
+        help="Replay a recording from tools/std_t98_record_iq.py instead of "
+        "opening the SDR, so the stack can be exercised without hardware.",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print the resolved config and derived rates, then exit without "
@@ -264,6 +284,9 @@ def _print_dry_run(config):
     print(f"  antenna = {config.sdr.antenna or '(driver default)'}")
     bandwidth = config.sdr.resolved_bandwidth()
     print(f"  bandwidth = {bandwidth if bandwidth else '(device default)'}")
+    print("[demod]")
+    for field_name in config.demod.__dataclass_fields__:
+        print(f"  {field_name} = {getattr(config.demod, field_name)!r}")
     print("[channelizer]")
     for field_name in config.channelizer.__dataclass_fields__:
         print(f"  {field_name} = {getattr(config.channelizer, field_name)!r}")
@@ -285,7 +308,9 @@ def main(top_block_cls=test3, options=None):
         _print_dry_run(config)
         return
 
-    tb = top_block_cls(config=config)
+    tb = top_block_cls(config=config, replay=args.replay)
+    if args.replay:
+        print(f"replaying {args.replay} instead of opening the SDR")
 
     def sig_handler(sig=None, frame=None):
         tb.stop()

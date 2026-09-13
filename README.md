@@ -124,7 +124,14 @@ sudo apt install libportaudio2
 pip install -r requirements-audio.txt
 ```
 
-`pyambelib` は PyPI に無いため `requirements-audio.txt` には含めていません。AMBE 復号を使う場合は別途ソースから導入してください。未導入でも音声復号以外は動作します。
+`pyambelib` は PyPI に無いため `requirements-audio.txt` には含めていません。C コンパイラと Python ヘッダだけでビルドできます（mbelib-neo の C ソースを同梱しているので外部ライブラリは不要です）。
+
+```bash
+git clone https://github.com/tallcat4/pyambelib
+./env/bin/pip install ./pyambelib
+```
+
+未導入でも音声復号以外は動作します。
 
 `rich` が入っていると launcher dashboard は安定した live 描画を使います。未導入時は簡易表示へフォールバックします。
 
@@ -228,6 +235,14 @@ python3 std_t98_30ch_multi_rf_backend.py --driver uhd --freq-err-offset 1030
 ```
 
 測り方は `tools/std_t98_channel_scope.py` が使えます。復調シンボルの中心が 0 からずれていれば、そのズレ量 × 273.9 Hz が残差です。
+
+### スケルチ
+
+`--squelch` はチャンネルごとのスケルチ閾値（dB、既定 -25）です。**絶対レベルなので、SDR のゲインとスケーリングに依存します。**
+
+同じ電界強度でも、ある機種では -25 dB に、別の機種では -40 dB になります。閾値が高すぎると**全チャンネルが無音化され、しかも何の表示も出ません** — 周波数補正を誤ったときと同じ、「正常に動いているのに何も復号しない」症状になります。実測では B210 でゲイン 10 のとき -39.9 dB で、既定の -25 dB では同期検出が 0、-60 dB にすると 240 回検出しました。
+
+新しい SDR では `std_t98_analyse_capture.py` の出力レベルを見て決めるか、十分低い値から始めてください。
 
 ### アンテナポート
 

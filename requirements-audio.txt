@@ -13,8 +13,13 @@ sounddevice>=0.4
 torch
 safetensors
 
-# pyambelib is NOT on PyPI -- `pip install pyambelib` fails. It is the AMBE
-# decoder binding and has to be installed separately from its own source, so it
-# is left out of this file to keep `pip install -r` working. Without it the
-# audio service cannot decode voice; everything else in the stack still runs.
-# Verify with: python3 -c "import pyambelib"
+# pyambelib is NOT on PyPI, so it is left out of this file to keep
+# `pip install -r` working. It is the AMBE decoder binding (a wrapper around
+# mbelib-neo, whose C sources are vendored in the repo) and builds with nothing
+# but a C compiler and the Python headers:
+#
+#   git clone https://github.com/tallcat4/pyambelib
+#   pip install ./pyambelib
+#
+# Verify with: python3 -c "import pyambelib; pyambelib.AmbeDecoder()"
+# Without it the audio service cannot decode voice; the rest of the stack runs.

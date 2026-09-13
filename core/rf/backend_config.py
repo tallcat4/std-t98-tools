@@ -160,9 +160,26 @@ class ChannelizerConfig:
 
 
 @dataclass(frozen=True)
+class DemodConfig:
+    """Per-channel demodulation settings that depend on signal level.
+
+    The squelch compares absolute channel power against a threshold, but how
+    much power a given field strength turns into depends entirely on the SDR's
+    gain and scaling -- the same signal that sits at -25 dB on one radio sits
+    at -40 dB on another. A fixed threshold is therefore no more portable than
+    a fixed frequency correction, and it fails the same silent way: the
+    flowgraph runs, the squelch mutes every channel, and nothing decodes.
+    """
+
+    squelch_threshold: float = -25.0   # dB, historical RTL-SDR value
+    squelch_alpha: float = 1.0
+
+
+@dataclass(frozen=True)
 class BackendConfig:
     sdr: SdrConfig = SdrConfig()
     channelizer: ChannelizerConfig = ChannelizerConfig()
+    demod: DemodConfig = DemodConfig()
 
 
 @dataclass(frozen=True)
@@ -305,7 +322,7 @@ def load_config_file(path: os.PathLike | str) -> BackendConfig:
     with open(path, "rb") as config_file:
         raw = tomllib.load(config_file)
 
-    unknown_sections = set(raw) - {"sdr", "channelizer"}
+    unknown_sections = set(raw) - {"sdr", "channelizer", "demod"}
     if unknown_sections:
         raise ValueError(f"Unknown config sections: {sorted(unknown_sections)}")
 
@@ -314,6 +331,7 @@ def load_config_file(path: os.PathLike | str) -> BackendConfig:
         channelizer=_coerce_section(
             ChannelizerConfig, ChannelizerConfig(), raw.get("channelizer", {})
         ),
+        demod=_coerce_section(DemodConfig, DemodConfig(), raw.get("demod", {})),
     )
 
 
@@ -374,6 +392,13 @@ def add_config_arguments(parser) -> None:
     )
     parser.add_argument("--freq-correction", type=float, help="Frequency correction in ppm.")
     parser.add_argument("--pfb-channels", type=int, help="Number of PFB channels (>= num_channels).")
+    parser.add_argument(
+        "--squelch", type=float,
+        help="Per-channel squelch threshold in dB (default -25). This is an "
+        "absolute level, so it depends on the SDR's gain and scaling and must "
+        "be checked on an unfamiliar radio: too high and every channel is "
+        "muted with no indication why.",
+    )
 
 
 def apply_cli_overrides(config: BackendConfig, args) -> BackendConfig:
@@ -398,6 +423,11 @@ def apply_cli_overrides(config: BackendConfig, args) -> BackendConfig:
         if value is not None:
             sdr_overrides[field_name] = value
 
+    demod_overrides: dict[str, Any] = {}
+    squelch = getattr(args, "squelch", None)
+    if squelch is not None:
+        demod_overrides["squelch_threshold"] = squelch
+
     channelizer_overrides: dict[str, Any] = {}
     pfb_channels = getattr(args, "pfb_channels", None)
     if pfb_channels is not None:
@@ -408,6 +438,9 @@ def apply_cli_overrides(config: BackendConfig, args) -> BackendConfig:
         channelizer=replace(config.channelizer, **channelizer_overrides)
         if channelizer_overrides
         else config.channelizer,
+        demod=replace(config.demod, **demod_overrides)
+        if demod_overrides
+        else config.demod,
     )
 
 
