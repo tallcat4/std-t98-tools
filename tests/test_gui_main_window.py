@@ -29,55 +29,48 @@ def test_channel_grid_has_fixed_thirty_cards(qapp):
     assert window._cards[29]._title.text() == "CH 30"
 
 
-def test_device_combo_lists_presets_and_sets_config_path(qapp):
+def test_none_profile_disables_calibration(qapp, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     window = MainWindow()
-    items = [window._device_combo.itemText(i) for i in range(window._device_combo.count())]
-    assert items[0] == "(custom)"
-    assert any("USRP B210" in text for text in items)
-
-    b210 = next(
-        i for i in range(window._device_combo.count())
-        if "USRP B210" in window._device_combo.itemText(i)
-    )
-    window._device_combo.setCurrentIndex(b210)
-    assert window._config_path.text().endswith("devices/usrp-b210.toml")
-
-    # Editing the path away from a preset falls back to "(custom)".
-    window._config_path.setText("/tmp/not-a-preset.toml")
-    assert window._device_combo.currentIndex() == 0
+    window._reload_profiles(select_path=None)
+    assert window._current_profile_path() is None
+    assert not window._freq_err.isEnabled()
 
 
-def test_calibration_saves_and_restores_per_config(qapp, tmp_path):
+def test_calibration_writes_into_profile_file(qapp, tmp_path, monkeypatch):
+    from app.profile_store import create_profile, read_freq_err_offset
+
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    template = tmp_path / "tmpl.toml"
+    template.write_text('# USRP B210\n[sdr]\ndriver = "uhd"\nsample_rate = 2000000\n')
+    profile = create_profile(template, "unit1")  # -> $XDG/std-t98/profiles/unit1.toml
+
     window = MainWindow()
-    # Isolate persistence from the real user settings.
-    window._settings = QtCore.QSettings(str(tmp_path / "s.ini"), QtCore.QSettings.IniFormat)
+    window._reload_profiles(select_path=str(profile))
+    assert window._current_profile_path() == str(profile)
+    assert window._freq_err.isEnabled()
 
-    cfg_a = tmp_path / "a.toml"
-    cfg_a.write_text('[sdr]\ndriver = "uhd"\n')
-    cfg_b = tmp_path / "b.toml"
-    cfg_b.write_text('[sdr]\ndriver = "rtlsdr"\n')
-
-    window._config_path.setText(str(cfg_a))
     window._freq_err.setText("1030")
-    window._save_current_calibration()
+    window._save_calibration_to_profile()
+    assert read_freq_err_offset(profile) == 1030
 
-    # Switching to another config shows its (absent) calibration...
-    window._config_path.setText(str(cfg_b))
+    # Re-selecting the profile mirrors the file's value back into the field.
+    window._reload_profiles(select_path=None)
     assert window._freq_err.text() == ""
-    # ...and switching back restores the saved one.
-    window._config_path.setText(str(cfg_a))
+    window._reload_profiles(select_path=str(profile))
     assert window._freq_err.text() == "1030"
 
 
-def test_invalid_calibration_is_not_saved(qapp, tmp_path):
+def test_external_profile_is_listed_and_selected(qapp, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    external = tmp_path / "my-b210.toml"
+    external.write_text('[sdr]\ndriver = "uhd"\n')
+
     window = MainWindow()
-    window._settings = QtCore.QSettings(str(tmp_path / "s.ini"), QtCore.QSettings.IniFormat)
-    cfg = tmp_path / "a.toml"
-    cfg.write_text('[sdr]\ndriver = "uhd"\n')
-    window._config_path.setText(str(cfg))
-    window._freq_err.setText("not-a-number")
-    window._save_current_calibration()  # should be a no-op, not raise
-    assert window._load_calibrations() == {}
+    window._reload_profiles(select_path=str(external))
+    assert window._current_profile_path() == str(external)
+    labels = [window._profile_combo.itemText(i) for i in range(window._profile_combo.count())]
+    assert any("external" in label for label in labels)
 
 
 def test_settings_panel_toggles(qapp):

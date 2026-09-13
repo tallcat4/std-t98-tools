@@ -8,7 +8,6 @@ The supervisor owns the process lifecycle; the window only starts/stops it and
 polls it from a QTimer so the Qt event loop never blocks.
 """
 
-import json
 import os
 import shlex
 import time
@@ -17,6 +16,13 @@ from pathlib import Path
 from PyQt5 import QtCore, QtWidgets
 
 from app.config_preview import detect_sdrs, list_device_presets, preview_config
+from app.profile_store import (
+    create_profile,
+    list_profiles,
+    profiles_dir,
+    read_freq_err_offset,
+    write_freq_err_offset,
+)
 from core.pipeline.multi_stack_dashboard import (
     ChannelView,
     _format_csm,
@@ -167,12 +173,15 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__(parent)
         self.repo_root = Path(repo_root) if repo_root else Path(__file__).resolve().parent.parent
         self.supervisor = None
+        self._running = False
+        self._syncing_profile = False
+        self._external_profiles = []  # profiles opened from outside profiles_dir()
 
-        # Remember the last config across launches; fall back to the same env
-        # var the backend/launcher read, so an existing workflow still works.
         self._settings = QtCore.QSettings("std-t98-tools", "receiver")
-        self._initial_config_path = (
-            self._settings.value("config_path", "", type=str)
+        # Restore the last profile; seed from the env var the backend/launcher
+        # read, so an existing STD_T98_BACKEND_CONFIG still works on first run.
+        initial_profile = (
+            self._settings.value("profile_path", "", type=str)
             or os.environ.get(CONFIG_ENV_VAR, "")
         )
 
@@ -185,8 +194,8 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._build_ui()
         self._apply_stylesheet()
+        self._reload_profiles(select_path=initial_profile or None)
         self._set_running(False)
-        self._on_config_path_changed()
 
     # --- UI construction ---------------------------------------------------
     def _build_ui(self):
@@ -230,48 +239,35 @@ class MainWindow(QtWidgets.QMainWindow):
         panel = QtWidgets.QVBoxLayout(self._settings_panel)
         panel.setContentsMargins(0, 0, 0, 0)
 
-        # Device preset picker: choosing a device fills in the config path.
-        self._syncing_device = False
-        device_row = QtWidgets.QHBoxLayout()
-        self._device_combo = QtWidgets.QComboBox()
-        self._device_combo.addItem("(custom)", None)
-        for preset in list_device_presets(self.repo_root / "devices"):
-            self._device_combo.addItem(preset.name, str(preset.path))
-            if preset.description:
-                self._device_combo.setItemData(
-                    self._device_combo.count() - 1, preset.description, QtCore.Qt.ToolTipRole
-                )
-        self._device_combo.currentIndexChanged.connect(self._on_device_selected)
-        device_row.addWidget(QtWidgets.QLabel("Device:"))
-        device_row.addWidget(self._device_combo)
-        device_row.addStretch(1)
-        panel.addLayout(device_row)
-
-        config_row = QtWidgets.QHBoxLayout()
-        self._config_path = QtWidgets.QLineEdit(self._initial_config_path)
-        self._config_path.setPlaceholderText("(no config — built-in RTL-SDR defaults)")
-        self._config_path.textChanged.connect(self._on_config_path_changed)
-        self._browse_button = QtWidgets.QPushButton("Browse…")
-        self._browse_button.clicked.connect(self._browse_config)
+        # Profile picker (layer B). A profile is a per-unit config file; the
+        # (none) entry runs the backend's built-in defaults. New profiles are
+        # copied from a device template; per-unit values live in the file.
+        profile_row = QtWidgets.QHBoxLayout()
+        self._profile_combo = QtWidgets.QComboBox()
+        self._profile_combo.currentIndexChanged.connect(self._on_profile_selected)
+        self._new_profile_button = QtWidgets.QPushButton("New from device…")
+        self._new_profile_button.clicked.connect(self._new_profile_from_device)
+        self._open_profile_button = QtWidgets.QPushButton("Open other…")
+        self._open_profile_button.clicked.connect(self._open_other_profile)
         self._detect_button = QtWidgets.QPushButton("Detect SDRs")
         self._detect_button.clicked.connect(self._detect_sdrs)
-        config_row.addWidget(QtWidgets.QLabel("Config:"))
-        config_row.addWidget(self._config_path, 1)
-        config_row.addWidget(self._browse_button)
-        config_row.addWidget(self._detect_button)
-        panel.addLayout(config_row)
+        profile_row.addWidget(QtWidgets.QLabel("Profile:"))
+        profile_row.addWidget(self._profile_combo, 1)
+        profile_row.addWidget(self._new_profile_button)
+        profile_row.addWidget(self._open_profile_button)
+        profile_row.addWidget(self._detect_button)
+        panel.addLayout(profile_row)
 
-        # Per-unit calibration: freq_err_offset, saved per config on this machine
-        # and passed as --freq-err-offset so presets stay unit-agnostic.
+        # Per-unit calibration, stored in the selected profile file itself.
         calib_row = QtWidgets.QHBoxLayout()
         self._freq_err = QtWidgets.QLineEdit()
         self._freq_err.setPlaceholderText("(none)")
         self._freq_err.setMaximumWidth(120)
         self._freq_err.textChanged.connect(self._update_preview)
-        self._freq_err.editingFinished.connect(self._save_current_calibration)
+        self._freq_err.editingFinished.connect(self._save_calibration_to_profile)
         calib_row.addWidget(QtWidgets.QLabel("Freq err offset:"))
         calib_row.addWidget(self._freq_err)
-        calib_row.addWidget(QtWidgets.QLabel("Hz — per-unit calibration, saved for this config."))
+        calib_row.addWidget(QtWidgets.QLabel("Hz — per-unit calibration, saved into the profile."))
         calib_row.addStretch(1)
         panel.addLayout(calib_row)
 
@@ -367,15 +363,16 @@ class MainWindow(QtWidgets.QMainWindow):
 
     # --- lifecycle ---------------------------------------------------------
     def _set_running(self, running):
+        self._running = running
         self._start_button.setEnabled(not running)
         self._stop_button.setEnabled(running)
         self._services_only.setEnabled(not running)
         self._backend_args.setEnabled(not running)
-        self._config_path.setEnabled(not running)
-        self._browse_button.setEnabled(not running)
+        self._profile_combo.setEnabled(not running)
+        self._new_profile_button.setEnabled(not running)
+        self._open_profile_button.setEnabled(not running)
         self._detect_button.setEnabled(not running)
-        self._device_combo.setEnabled(not running)
-        self._freq_err.setEnabled(not running)
+        self._refresh_freq_field_enabled()
 
     # --- settings panel ----------------------------------------------------
     def _on_settings_toggled(self, checked):
@@ -384,35 +381,104 @@ class MainWindow(QtWidgets.QMainWindow):
             QtCore.Qt.DownArrow if checked else QtCore.Qt.RightArrow
         )
 
-    def _on_config_path_changed(self):
-        self._sync_device_combo()
-        self._load_calibration_into_field()
+    # --- profiles (layer B: per-unit config files) ------------------------
+    def _current_profile_path(self):
+        """Selected profile path (str), or None for built-in defaults."""
+        return self._profile_combo.currentData()
+
+    def _append_profile_item(self, path):
+        self._profile_combo.addItem(f"{Path(path).stem} (external)", str(path))
+
+    def _reload_profiles(self, select_path=None):
+        self._syncing_profile = True
+        self._profile_combo.clear()
+        self._profile_combo.addItem("(none — built-in defaults)", None)
+        for profile in list_profiles():
+            self._profile_combo.addItem(profile.name, str(profile.path))
+        for path in self._external_profiles:
+            self._append_profile_item(path)
+        self._syncing_profile = False
+        self._select_profile_path(select_path)
+
+    def _select_profile_path(self, path):
+        target = os.path.abspath(os.path.expanduser(path)) if path else ""
+        index = 0  # "(none)"
+        for candidate in range(1, self._profile_combo.count()):
+            data = self._profile_combo.itemData(candidate)
+            if data and target and os.path.abspath(data) == target:
+                index = candidate
+                break
+        else:
+            # A path outside the profiles dir: list it as an external entry.
+            if target and os.path.exists(target):
+                known = {os.path.abspath(p) for p in self._external_profiles}
+                if target not in known:
+                    self._external_profiles.append(target)
+                    self._append_profile_item(target)
+                    index = self._profile_combo.count() - 1
+        self._syncing_profile = True
+        self._profile_combo.setCurrentIndex(index)
+        self._syncing_profile = False
+        self._on_profile_changed()
+
+    def _on_profile_selected(self, _index):
+        if self._syncing_profile:
+            return
+        self._on_profile_changed()
+
+    def _on_profile_changed(self):
+        path = self._current_profile_path()
+        offset = read_freq_err_offset(path) if path else None
+        # Programmatic setText fires textChanged (-> preview), not editingFinished,
+        # so mirroring the file into the field does not write it straight back.
+        self._freq_err.setText("" if offset is None else f"{offset:g}")
+        self._refresh_freq_field_enabled()
         self._update_preview()
 
-    # --- per-unit calibration (freq_err_offset) ---------------------------
-    def _calibration_key(self):
-        text = self._config_path.text().strip()
-        return os.path.abspath(os.path.expanduser(text)) if text else "builtin"
+    def _refresh_freq_field_enabled(self):
+        # Calibration lives in the profile file, so it needs a selected profile.
+        has_profile = self._current_profile_path() is not None
+        self._freq_err.setEnabled((not self._running) and has_profile)
+        self._freq_err.setToolTip(
+            "" if has_profile else "Create or open a profile to save calibration."
+        )
 
-    def _load_calibrations(self):
+    def _new_profile_from_device(self):
+        presets = list_device_presets(self.repo_root / "devices")
+        if not presets:
+            QtWidgets.QMessageBox.warning(self, "New profile", "No device templates in devices/.")
+            return
+        names = [preset.name for preset in presets]
+        choice, ok = QtWidgets.QInputDialog.getItem(
+            self, "New profile", "Device template:", names, 0, False
+        )
+        if not ok:
+            return
+        preset = presets[names.index(choice)]
+        name, ok = QtWidgets.QInputDialog.getText(
+            self, "New profile", "Profile name:", text=Path(preset.path).stem
+        )
+        name = name.strip()
+        if not ok or not name:
+            return
         try:
-            return json.loads(self._settings.value("calibrations", "{}", type=str) or "{}")
-        except (ValueError, TypeError):
-            return {}
+            dest = create_profile(preset.path, name)
+        except FileExistsError:
+            resp = QtWidgets.QMessageBox.question(
+                self, "Overwrite?", f"A profile named '{name}' exists. Overwrite it?"
+            )
+            if resp != QtWidgets.QMessageBox.Yes:
+                return
+            (profiles_dir() / f"{name}.toml").unlink()
+            dest = create_profile(preset.path, name)
+        self._reload_profiles(select_path=str(dest))
 
-    def _save_calibration(self, key, value):
-        data = self._load_calibrations()
-        if value is None:
-            data.pop(key, None)
-        else:
-            data[key] = value
-        self._settings.setValue("calibrations", json.dumps(data))
-
-    def _load_calibration_into_field(self):
-        saved = self._load_calibrations().get(self._calibration_key())
-        # Programmatic setText fires textChanged (-> preview) but not
-        # editingFinished, so this restore does not re-save.
-        self._freq_err.setText("" if saved is None else f"{saved:g}")
+    def _open_other_profile(self):
+        path, _ = QtWidgets.QFileDialog.getOpenFileName(
+            self, "Open profile", str(profiles_dir()), "TOML config (*.toml);;All files (*)"
+        )
+        if path:
+            self._reload_profiles(select_path=path)
 
     def _parse_freq_err(self):
         """Field value as a float, or None if empty. Raises ValueError if invalid."""
@@ -421,34 +487,20 @@ class MainWindow(QtWidgets.QMainWindow):
             return None
         return float(text)
 
-    def _save_current_calibration(self):
+    def _save_calibration_to_profile(self):
+        path = self._current_profile_path()
+        if path is None:
+            return
         try:
             value = self._parse_freq_err()
         except ValueError:
-            return  # invalid text: leave the stored value untouched
-        self._save_calibration(self._calibration_key(), value)
-
-    def _on_device_selected(self, _index):
-        if self._syncing_device:
+            return  # invalid text: leave the file untouched
+        try:
+            write_freq_err_offset(path, value)
+        except OSError as exc:
+            QtWidgets.QMessageBox.warning(self, "Save calibration", f"Could not write to profile:\n{exc}")
             return
-        path = self._device_combo.currentData()
-        if path:
-            self._config_path.setText(path)
-
-    def _sync_device_combo(self):
-        """Point the Device combo at the preset matching the config path, else custom."""
-        text = self._config_path.text().strip()
-        current = os.path.abspath(os.path.expanduser(text)) if text else ""
-        index = 0  # "(custom)"
-        if current:
-            for candidate in range(1, self._device_combo.count()):
-                data = self._device_combo.itemData(candidate)
-                if data and os.path.abspath(data) == current:
-                    index = candidate
-                    break
-        self._syncing_device = True
-        self._device_combo.setCurrentIndex(index)
-        self._syncing_device = False
+        self._update_preview()
 
     def _update_preview(self):
         # In services-only mode the RF backend is started elsewhere, so the
@@ -465,7 +517,7 @@ class MainWindow(QtWidgets.QMainWindow):
             override = None
             freq_err_note = "Freq err offset must be a number."
 
-        preview = preview_config(self._config_path.text().strip(), freq_err_offset_override=override)
+        preview = preview_config(self._current_profile_path() or "", freq_err_offset_override=override)
         if freq_err_note:
             self._preview.setPlainText(preview.summary)
             self._preview_note.setText(freq_err_note)
@@ -488,17 +540,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self._preview_note.style().unpolish(self._preview_note)
         self._preview_note.style().polish(self._preview_note)
 
-    def _browse_config(self):
-        start_dir = ""
-        current = self._config_path.text().strip()
-        if current:
-            start_dir = str(Path(current).expanduser().parent)
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Select backend config", start_dir, "TOML config (*.toml);;All files (*)"
-        )
-        if path:
-            self._config_path.setText(path)
-
     def _detect_sdrs(self):
         devices, error = detect_sdrs()
         if devices is None:
@@ -519,35 +560,25 @@ class MainWindow(QtWidgets.QMainWindow):
                 bits.append(f"serial={device.serial}")
             lines.append("  • " + "  ".join(bits))
 
-        # Tell the user whether the config's driver is actually present.
+        # Tell the user whether the selected profile's driver is present.
         note = ""
-        preview_path = self._config_path.text().strip()
-        if preview_path:
-            config = preview_config(preview_path)
+        path = self._current_profile_path()
+        if path:
+            config = preview_config(path)
             if config.ok:
                 driver = config.summary.splitlines()[0].split("driver=")[-1].split(",")[0]
                 present = {device.driver for device in devices}
                 if driver in present:
-                    note = f"\nConfig driver '{driver}' is connected."
+                    note = f"\nProfile driver '{driver}' is connected."
                 else:
                     note = (
-                        f"\n⚠ Config driver '{driver}' is NOT among the connected devices "
+                        f"\n⚠ Profile driver '{driver}' is NOT among the connected devices "
                         f"({', '.join(sorted(present))})."
                     )
 
         QtWidgets.QMessageBox.information(
             self, "Detected SDRs", "\n".join(lines) + note
         )
-
-    def _resolved_config_path(self):
-        """The config path to use, or None. Raises FileNotFoundError if set but missing."""
-        text = self._config_path.text().strip()
-        if not text:
-            return None
-        path = Path(text).expanduser()
-        if not path.exists():
-            raise FileNotFoundError(str(path))
-        return path
 
     def start_stack(self):
         if self.supervisor is not None:
@@ -563,32 +594,27 @@ class MainWindow(QtWidgets.QMainWindow):
         backend_args = list(extra_args)
         if not services_only:
             try:
-                config_path = self._resolved_config_path()
-            except FileNotFoundError as exc:
-                QtWidgets.QMessageBox.critical(
-                    self, "Cannot start", f"Config file not found:\n{exc}"
-                )
-                return
-
-            try:
-                freq_err = self._parse_freq_err()
+                self._parse_freq_err()  # validate before writing / starting
             except ValueError:
                 QtWidgets.QMessageBox.warning(
                     self, "Cannot start", "Freq err offset must be a number (Hz), or empty."
                 )
                 return
 
-            # --config / --freq-err-offset first so extra args can still override.
-            resolved = []
-            if config_path is not None:
-                resolved += ["--config", str(config_path)]
-                self._settings.setValue("config_path", str(config_path))
-            if freq_err is not None:
-                resolved += ["--freq-err-offset", f"{freq_err:g}"]
-            backend_args = [*resolved, *extra_args]
-
-            # Persist the calibration for this config so it comes back next time.
-            self._save_calibration(self._calibration_key(), freq_err)
+            path = self._current_profile_path()
+            if path is not None:
+                if not os.path.exists(os.path.expanduser(path)):
+                    QtWidgets.QMessageBox.critical(
+                        self, "Cannot start", f"Profile not found:\n{path}"
+                    )
+                    return
+                # The profile file is the source of truth: fold the field into it,
+                # then the backend reads the calibration from --config.
+                self._save_calibration_to_profile()
+                backend_args = ["--config", str(path), *extra_args]
+                self._settings.setValue("profile_path", str(path))
+            else:
+                self._settings.setValue("profile_path", "")
 
         supervisor = StackSupervisor(
             repo_root=self.repo_root,

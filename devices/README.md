@@ -1,9 +1,13 @@
 # devices/
 
-機種ごとの設定プリセット（backend の TOML）です。GUI の Device プルダウンに並び、
-選ぶと解決結果がプレビューされ、そのまま起動に使えます。端末なら
+機種ごとの設定テンプレート（backend の TOML）です。**機種の既定だけ**を持ち、
+個体固有値（周波数校正 `freq_err_offset`、`serial=` など）は持ちません。
+
+GUI ではこれらを元に **New from device…** で個体プロファイル（実運用ファイル）を
+作ります。プロファイルは既定で `~/.config/std-t98/profiles/` に保存され、校正などの
+個体固有値はそのファイルに入ります（テンプレートは書き換えません）。テンプレートを
+端末で直接使うこともできます:
 `STD_T98_BACKEND_CONFIG=devices/usrp-b210.toml python3 std_t98_multi_service_launcher.py`
-のように渡せます。
 
 各ファイルは通常の backend 設定 TOML（`[sdr]` / `[channelizer]` / `[demod]`）です。
 全キーの意味は [`../config.example.toml`](../config.example.toml) を参照してください。
