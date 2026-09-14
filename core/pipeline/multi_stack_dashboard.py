@@ -24,6 +24,11 @@ class ProcessView:
     pid: int | None = None
     state: str = "STARTING"
     detail: str = ""
+    # Real self-check results (e.g. RF: UHD sample-rate/frequency/antenna
+    # drift and sensor checks), not just "a status packet arrived once".
+    # health_ok is None until the first self-check reports in.
+    health_ok: bool | None = None
+    health: str = ""
 
 
 @dataclass
@@ -89,6 +94,15 @@ def _process_state_text(state: str):
     return Text(_format_process_state(state), style=style)
 
 
+def _health_text(health: str, health_ok: bool | None):
+    if not health:
+        return "-"
+    if not rich_dashboard_available():
+        return health
+    style = "grey58" if health_ok is None else ("bold green" if health_ok else "bold red")
+    return Text(health, style=style)
+
+
 def _rx_state_text(state: str):
     if not rich_dashboard_available():
         return _format_rx_state(state)
@@ -116,6 +130,7 @@ def build_stack_dashboard_renderable(processes, channels, mode_label="full-stack
     process_table.add_column("Process", style="cyan", no_wrap=True)
     process_table.add_column("State", no_wrap=True)
     process_table.add_column("PID", justify="right", no_wrap=True)
+    process_table.add_column("Health", overflow="fold")
     process_table.add_column("Python", overflow="fold")
     if show_debug_metrics:
         process_table.add_column("Metrics", overflow="fold")
@@ -125,6 +140,7 @@ def build_stack_dashboard_renderable(processes, channels, mode_label="full-stack
             process_view.name,
             _process_state_text(process_view.state),
             str(process_view.pid) if process_view.pid is not None else "-",
+            _health_text(process_view.health, process_view.health_ok),
             process_view.python_executable,
         ]
         if show_debug_metrics:
@@ -196,6 +212,9 @@ def _build_plain_dashboard_text(processes, channels, mode_label="full-stack", sh
         lines.append(
             f"[{process_view.name:<8}] {_format_process_state(process_view.state)} pid={pid} via {process_view.python_executable}"
         )
+        if process_view.health:
+            marker = "?" if process_view.health_ok is None else ("OK" if process_view.health_ok else "!!")
+            lines.append(f"  health [{marker}]: {process_view.health}")
         if show_debug_metrics and process_view.detail:
             lines.append(f"  metrics: {process_view.detail}")
 

@@ -1,15 +1,14 @@
 """RF backend configuration and channelizer rate derivation.
 
-This module keeps device-specific settings (which SDR, at what sample rate,
-gains, calibration) out of the GNU Radio flowgraph so the same backend can
-drive RTL-SDR, USRP, HackRF and other SoapySDR devices without editing the
-flowgraph source.
+This module keeps device-specific settings (sample rate, gains, calibration)
+out of the GNU Radio flowgraph. The backend targets USRP hardware through
+UHD (via gr-uhd's ``uhd.usrp_source``) only -- there is no per-driver
+branching here, unlike the SoapySDR-based multi-vendor design this replaced.
 
 Two responsibilities live here:
 
 1. :class:`BackendConfig` and its sub-configs describe *what* to receive with.
    They can be built from defaults, a TOML file, and/or argparse overrides.
-   The defaults reproduce the historical RTL-SDR / 1.2 MHz behaviour exactly.
 
 2. :func:`derive_rates` computes the resampling / channelizer parameters from
    the input sample rate instead of hard-coding them. STD-T98 uses a 6.25 kHz
@@ -44,36 +43,6 @@ BAUD_RATE = 2400
 
 CONFIG_ENV_VAR = "STD_T98_BACKEND_CONFIG"
 
-# SoapySDR validates stream arguments against what the device advertises and
-# raises for anything it does not know, so a stream arg that helps one driver
-# is fatal on another. "bufflen" is an rtlsdr/osmosdr-specific knob: passing it
-# to e.g. uhd or hackrf aborts source construction with
-# "Unsupported stream argument bufflen". Keep the historical RTL-SDR buffer
-# size as that driver's default and send nothing to drivers we have no reason
-# to tune, while still letting the config file or CLI override either way.
-DRIVER_DEFAULT_STREAM_ARGS = {
-    "rtlsdr": "bufflen=16384",
-}
-
-# Drivers that already track the analog filter to the sample rate, so touching
-# the bandwidth would only change long-standing behaviour. Everything else can
-# leave its front end wide open -- a USRP B210 sits at its full 56 MHz no
-# matter how slowly you sample, folding megahertz of spectrum onto the 187.5
-# kHz this actually cares about -- so those get the bandwidth set for them.
-DRIVERS_WITH_AUTOMATIC_BANDWIDTH = {"rtlsdr"}
-
-# Frequency error is a property of one physical radio, not of a driver, so a
-# value measured on one device is meaningless on another and actively harmful:
-# the demodulator turns it into a DC level on the symbol stream, and the sync
-# correlator compares against absolute levels with no DC removal. The historical
-# -340 Hz was measured on one RTL-SDR; on any other radio it is 1.24 symbol
-# units of error, enough on its own to push the sync SSE past its threshold.
-# So it stays attached to the driver it was measured on, and every other device
-# starts from zero and must be calibrated (or corrected) for itself.
-DRIVER_DEFAULT_FREQ_ERR_OFFSET = {
-    "rtlsdr": -340.0,
-}
-
 # Resampler ratio search cap. Keeps GNU Radio's rational_resampler taps sane
 # when the input rate is not an exact multiple of the channelizer rate; the
 # resulting rate error is well under 1 ppm for any realistic SDR rate.
@@ -82,56 +51,35 @@ _MAX_RESAMP_DENOMINATOR = 10_000
 
 @dataclass(frozen=True)
 class SdrConfig:
-    """Device-facing settings passed to the SoapySDR source."""
+    """Device-facing settings passed to the UHD source."""
 
-    driver: str = "rtlsdr"           # SoapySDR driver key, e.g. rtlsdr / uhd / hackrf
-    device_args: str = ""            # extra device selection, e.g. "serial=123,type=b200"
+    device_args: str = ""            # UHD device address, e.g. "serial=123,type=b200"
     sample_rate: float = 1_200_000.0
     center_freq: float = float(DEFAULT_CENTER_FREQ_HZ)
     freq_offset: float = 0.0          # deliberate tuning offset (Hz)
-    # None asks for this driver's default (see above); 0 means no correction.
-    freq_err_offset: Optional[float] = None
-    freq_correction: float = 0.0      # frequency correction in ppm
+    freq_err_offset: Optional[float] = None  # per-unit calibration; None => 0
     tuner_gain: float = 30.0
-    agc: bool = True
-    bias_tee: bool = False
-    gain_element: str = "TUNER"       # SoapySDR gain element; "" => overall gain
-    stream_args: Optional[str] = None  # None => this driver's default (see above)
-    # RX port. None leaves whatever the driver selects, which is the only
-    # sensible default: single-input devices like RTL-SDR have nothing to pick,
-    # while a B210 exposes TX/RX and RX2 and defaults to RX2.
+    gain_element: str = ""           # UHD named gain stage (e.g. "PGA" on a B210); "" => overall gain
+    # Hardware AGC (uhd.usrp_source.set_rx_agc). When on, the device ignores
+    # tuner_gain/gain_element. Not every daughterboard supports it; unsupported
+    # boards are left alone rather than erroring (see core.rf.uhd_source).
+    agc: bool = False
+    # RX port. None leaves whatever UHD selects for this daughterboard, which
+    # is the only sensible default: some boards have a single input, while a
+    # B210 exposes TX/RX and RX2 and defaults to RX2.
     antenna: Optional[str] = None
-    # Analog front-end bandwidth in Hz. None asks for the driver-aware default
-    # (see above); 0 explicitly leaves whatever the device came up with.
+    # Analog front-end bandwidth in Hz. None asks for the sample rate (a USRP
+    # otherwise sits at its full front-end bandwidth no matter how slowly you
+    # sample, aliasing everything in); 0 explicitly leaves the device alone.
     bandwidth: Optional[float] = None
 
     def device_string(self) -> str:
-        """Build the SoapySDR device string.
-
-        ``device_args`` is appended verbatim so a specific unit can be picked
-        out of several identical ones (``serial=...``) or a driver can be told
-        what it is talking to (``type=b200``).
-        """
-        device = f"driver={self.driver}"
-        if self.device_args:
-            device = f"{device},{self.device_args}"
-        return device
-
-    def resolved_stream_args(self) -> str:
-        """Stream args actually handed to SoapySDR.
-
-        An explicit setting always wins, including an empty string, which is
-        how a user suppresses a driver default.
-        """
-        if self.stream_args is not None:
-            return self.stream_args
-        return DRIVER_DEFAULT_STREAM_ARGS.get(self.driver, "")
+        """The UHD device address string passed to ``uhd.usrp_source``."""
+        return self.device_args
 
     def resolved_freq_err_offset(self) -> float:
         """Frequency error correction actually applied, in Hz."""
-        if self.freq_err_offset is not None:
-            return self.freq_err_offset
-        return DRIVER_DEFAULT_FREQ_ERR_OFFSET.get(self.driver, 0.0)
+        return self.freq_err_offset if self.freq_err_offset is not None else 0.0
 
     def tuned_freq(self) -> float:
         """The frequency the SDR is actually told to tune to."""
@@ -141,10 +89,6 @@ class SdrConfig:
         """Analog bandwidth to request, or None to leave the device alone."""
         if self.bandwidth is not None:
             return self.bandwidth or None
-        if self.driver in DRIVERS_WITH_AUTOMATIC_BANDWIDTH:
-            return None
-        # Matching the sample rate keeps the whole digitised span usable while
-        # filtering out everything that would alias into it.
         return self.sample_rate
 
 
@@ -171,7 +115,7 @@ class DemodConfig:
     flowgraph runs, the squelch mutes every channel, and nothing decodes.
     """
 
-    squelch_threshold: float = -25.0   # dB, historical RTL-SDR value
+    squelch_threshold: float = -25.0   # dB
     squelch_alpha: float = 1.0
 
 
@@ -276,24 +220,6 @@ def derive_rates(sdr: SdrConfig, channelizer: ChannelizerConfig) -> DerivedRates
     )
 
 
-def nearest_sample_rates(
-    available: "list[float]",
-    near: float,
-    count: int = 5,
-) -> list[float]:
-    """The device's supported rates closest to ``near``.
-
-    Only proximity is used. The stage-1 ratio is a bounded-denominator
-    approximation, and measuring it across the plausible rate range puts the
-    worst raster error near 0.1 Hz on a 6250 Hz bin, so there is no second
-    criterion worth filtering on.
-    """
-    return sorted(
-        (rate for rate in available if rate > 0),
-        key=lambda rate: (abs(rate - near), rate),
-    )[:count]
-
-
 # ---------------------------------------------------------------------------
 # Loading: defaults -> TOML file -> CLI overrides
 # ---------------------------------------------------------------------------
@@ -310,8 +236,9 @@ def _coerce_section(cls, defaults, values: Mapping[str, Any]):
 def load_config_file(path: os.PathLike | str) -> BackendConfig:
     """Load a TOML config file into a :class:`BackendConfig`.
 
-    Missing sections/keys fall back to the RTL-SDR defaults. Unknown keys are
-    rejected so typos surface immediately instead of being silently ignored.
+    Missing sections/keys fall back to defaults. Unknown keys are rejected so
+    typos (or keys from the old SoapySDR-based schema) surface immediately
+    instead of being silently ignored.
     """
     if tomllib is None:  # pragma: no cover
         raise RuntimeError(
@@ -345,52 +272,38 @@ def add_config_arguments(parser) -> None:
             f"{CONFIG_ENV_VAR} environment variable if set."
         ),
     )
-    parser.add_argument("--driver", help="SoapySDR driver key (e.g. rtlsdr, uhd, hackrf).")
     parser.add_argument(
         "--device-args",
-        help='Extra SoapySDR device selection appended to the device string, '
-        'e.g. "serial=00000001" or "type=b200". Use this to pick one of '
-        "several identical SDRs.",
-    )
-    parser.add_argument(
-        "--stream-args",
-        help="SoapySDR stream arguments. Defaults to the driver's own default ("
-        + ", ".join(f"{k}: {v}" for k, v in DRIVER_DEFAULT_STREAM_ARGS.items())
-        + "; none for other drivers). Pass an empty string to send none. "
-        "Unsupported args make the device refuse to open.",
+        help='UHD device address appended to the device string, e.g. '
+        '"serial=00000001" or "type=b200". Use this to pick one of several '
+        "connected USRPs.",
     )
     parser.add_argument("--sample-rate", type=float, help="SDR sample rate in Hz.")
     parser.add_argument("--freq", type=float, help="Center frequency in Hz.")
-    parser.add_argument("--gain", type=float, help="Tuner gain (used when AGC is off).")
-    parser.add_argument("--gain-element", help='SoapySDR gain element name ("" for overall gain).')
+    parser.add_argument("--gain", type=float, help="RX gain in dB (used when AGC is off).")
+    parser.add_argument("--gain-element", help='UHD named gain stage (e.g. "PGA" on a B210; "" for overall gain).')
     agc_group = parser.add_mutually_exclusive_group()
-    agc_group.add_argument("--agc", dest="agc", action="store_true", default=None, help="Enable hardware AGC.")
-    agc_group.add_argument("--no-agc", dest="agc", action="store_false", default=None, help="Disable hardware AGC.")
-    bias_group = parser.add_mutually_exclusive_group()
-    bias_group.add_argument("--bias-tee", dest="bias_tee", action="store_true", default=None, help="Enable bias tee if supported.")
-    bias_group.add_argument("--no-bias-tee", dest="bias_tee", action="store_false", default=None, help="Disable bias tee.")
+    agc_group.add_argument("--agc", dest="agc", action="store_true", default=None, help="Enable hardware AGC. Not every board supports it.")
+    agc_group.add_argument("--no-agc", dest="agc", action="store_false", default=None, help="Disable hardware AGC (default).")
     parser.add_argument(
         "--bandwidth",
         type=float,
-        help="Analog front-end bandwidth in Hz. Defaults to the sample rate on "
-        "devices that do not track it themselves (RTL-SDR does). Pass 0 to "
-        "leave the device's own setting alone.",
+        help="Analog front-end bandwidth in Hz. Defaults to the sample rate. "
+        "Pass 0 to leave the device's own setting alone.",
     )
     parser.add_argument(
         "--antenna",
         help="RX antenna port to select (e.g. RX2 or TX/RX on a USRP B210). "
-        "Omit to leave the driver's own default. Devices with a single input "
+        "Omit to leave the device's own default. Boards with a single input "
         "ignore this.",
     )
     parser.add_argument(
         "--freq-err-offset", type=float,
         help="Per-device frequency error correction in Hz, added to the tuned "
-        "frequency. This is calibration for one specific radio: it is applied "
-        "only to the driver it was measured on (rtlsdr: -340), and any other "
-        "device starts from 0 and must be measured for itself. Pass 0 to "
-        "disable it explicitly.",
+        "frequency. This is calibration for one specific radio and is "
+        "meaningless on another; it starts at 0 and must be measured per "
+        "unit. Pass 0 to disable it explicitly.",
     )
-    parser.add_argument("--freq-correction", type=float, help="Frequency correction in ppm.")
     parser.add_argument("--pfb-channels", type=int, help="Number of PFB channels (>= num_channels).")
     parser.add_argument(
         "--squelch", type=float,
@@ -405,19 +318,15 @@ def apply_cli_overrides(config: BackendConfig, args) -> BackendConfig:
     """Return a new config with any provided CLI overrides applied."""
     sdr_overrides: dict[str, Any] = {}
     for attr, field_name in (
-        ("driver", "driver"),
         ("device_args", "device_args"),
-        ("stream_args", "stream_args"),
         ("sample_rate", "sample_rate"),
         ("freq", "center_freq"),
         ("gain", "tuner_gain"),
         ("gain_element", "gain_element"),
+        ("agc", "agc"),
         ("antenna", "antenna"),
         ("bandwidth", "bandwidth"),
-        ("agc", "agc"),
-        ("bias_tee", "bias_tee"),
         ("freq_err_offset", "freq_err_offset"),
-        ("freq_correction", "freq_correction"),
     ):
         value = getattr(args, attr, None)
         if value is not None:

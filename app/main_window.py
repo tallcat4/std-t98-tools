@@ -8,22 +8,20 @@ The supervisor owns the process lifecycle; the window only starts/stops it and
 polls it from a QTimer so the Qt event loop never blocks.
 """
 
-import os
 import shlex
 import time
 from pathlib import Path
 
 from PyQt5 import QtCore, QtWidgets
 
-from app.config_preview import detect_sdrs, list_device_presets, preview_config
-from app.profile_store import (
-    create_profile,
-    list_profiles,
-    profiles_dir,
-    read_freq_err_offset,
-    read_squelch_threshold,
-    write_freq_err_offset,
-    write_squelch_threshold,
+from app.config_preview import detect_sdrs, preview_config
+from app.settings_store import (
+    ensure_settings_file,
+    read_demod_value,
+    read_sdr_value,
+    settings_path,
+    write_demod_value,
+    write_sdr_value,
 )
 from core.pipeline.multi_stack_dashboard import (
     ChannelView,
@@ -32,12 +30,23 @@ from core.pipeline.multi_stack_dashboard import (
     _format_secret_cache,
 )
 from core.pipeline.stack_supervisor import StackSupervisor
-from core.rf.backend_config import CONFIG_ENV_VAR, DemodConfig
+from core.rf.backend_config import DemodConfig, load_config_file
 
 CHANNEL_COUNT = 30
 POLL_INTERVAL_MS = 100
 SQUELCH_RANGE_DB = (-100, 0)
 DEFAULT_SQUELCH_THRESHOLD = DemodConfig().squelch_threshold
+_SDR_NUMERIC_FIELDS = {"sample_rate", "tuner_gain", "bandwidth", "freq_err_offset"}
+
+
+def _format_field_value(value):
+    """A settings value as plain text for a form field -- e.g. 2000000, not
+    the 2e+06 that Python's ``:g`` format would give a whole-numbered float."""
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
 
 _PROCESS_STATE_COLOURS = {
     "RUNNING": "#2e7d32",
@@ -82,9 +91,19 @@ class ProcessBadge(QtWidgets.QFrame):
         self._detail.hide()
         outer.addWidget(self._detail)
 
+        self._health = QtWidgets.QLabel("")
+        self._health.setStyleSheet("font-size: 10px;")
+        self._health.hide()
+        outer.addWidget(self._health)
+
     def update_from(self, process_view):
         self._state.setText(process_view.state)
         colour = _PROCESS_STATE_COLOURS.get(process_view.state, "#b8860b")
+        # A real self-check catching a problem overrides the green "RUNNING"
+        # look with the same amber used for STARTING: alive is not the same
+        # as healthy.
+        if process_view.state == "RUNNING" and process_view.health_ok is False:
+            colour = _PROCESS_STATE_COLOURS["STARTING"]
         self._state.setStyleSheet(f"color: {colour}; font-weight: 700;")
         self._pid.setText(f"pid {process_view.pid}" if process_view.pid is not None else "")
         if process_view.state == "STARTING" and not process_view.detail:
@@ -95,6 +114,16 @@ class ProcessBadge(QtWidgets.QFrame):
             self._detail.show()
         else:
             self._detail.hide()
+
+        if process_view.health:
+            ok = process_view.health_ok
+            prefix = "?" if ok is None else ("✓" if ok else "⚠")
+            colour = "#888" if ok is None else ("#2e7d32" if ok else "#c62828")
+            self._health.setText(f"{prefix} {process_view.health}")
+            self._health.setStyleSheet(f"color: {colour}; font-size: 10px;")
+            self._health.show()
+        else:
+            self._health.hide()
 
 
 class ChannelCard(QtWidgets.QFrame):
@@ -201,16 +230,6 @@ class MainWindow(QtWidgets.QMainWindow):
         self.repo_root = Path(repo_root) if repo_root else Path(__file__).resolve().parent.parent
         self.supervisor = None
         self._running = False
-        self._syncing_profile = False
-        self._external_profiles = []  # profiles opened from outside profiles_dir()
-
-        self._settings = QtCore.QSettings("std-t98-tools", "receiver")
-        # Restore the last profile; seed from the env var the backend/launcher
-        # read, so an existing STD_T98_BACKEND_CONFIG still works on first run.
-        initial_profile = (
-            self._settings.value("profile_path", "", type=str)
-            or os.environ.get(CONFIG_ENV_VAR, "")
-        )
 
         self.setWindowTitle("STD-T98 Multi Receiver")
         self.resize(1100, 820)
@@ -221,7 +240,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self._build_ui()
         self._apply_stylesheet()
-        self._reload_profiles(select_path=initial_profile or None)
+        self._load_settings_into_form()
         self._set_running(False)
 
     # --- UI construction ---------------------------------------------------
@@ -275,49 +294,85 @@ class MainWindow(QtWidgets.QMainWindow):
         squelch_row.addWidget(self._squelch_value_label)
         self._squelch_save_button = QtWidgets.QPushButton("Save")
         self._squelch_save_button.setToolTip(
-            "Write the current value into the selected profile's [demod].squelch_threshold."
+            "Write the current value into the settings file's [demod].squelch_threshold."
         )
-        self._squelch_save_button.clicked.connect(self._save_squelch_to_profile)
+        self._squelch_save_button.clicked.connect(self._save_squelch_to_settings)
         squelch_row.addWidget(self._squelch_save_button)
         root.addLayout(squelch_row)
 
-        # Collapsible settings panel: config picker, resolved preview, extra
-        # backend args. Not needed while receiving, so it folds away on Start.
+        # Collapsible settings panel: a direct-edit form over the single fixed
+        # settings file (app.settings_store), resolved preview, extra backend
+        # args. Not needed while receiving, so it folds away on Start. There
+        # is only one kind of device now (a USRP over UHD), so there is
+        # nothing to pick a profile *of* -- every field here edits [sdr] in
+        # that one file immediately, no separate save step.
         self._settings_panel = QtWidgets.QWidget()
         panel = QtWidgets.QVBoxLayout(self._settings_panel)
         panel.setContentsMargins(0, 0, 0, 0)
 
-        # Profile picker (layer B). A profile is a per-unit config file; the
-        # (none) entry runs the backend's built-in defaults. New profiles are
-        # copied from a device template; per-unit values live in the file.
-        profile_row = QtWidgets.QHBoxLayout()
-        self._profile_combo = QtWidgets.QComboBox()
-        self._profile_combo.currentIndexChanged.connect(self._on_profile_selected)
-        self._new_profile_button = QtWidgets.QPushButton("New from device…")
-        self._new_profile_button.clicked.connect(self._new_profile_from_device)
-        self._open_profile_button = QtWidgets.QPushButton("Open other…")
-        self._open_profile_button.clicked.connect(self._open_other_profile)
+        form = QtWidgets.QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+
+        self._antenna_field = QtWidgets.QComboBox()
+        self._antenna_field.setEditable(True)
+        self._antenna_field.addItems(["", "TX/RX", "RX2"])
+        self._antenna_field.setToolTip("RX antenna port. Empty = device default.")
+        form.addRow("Antenna:", self._antenna_field)
+
+        self._sample_rate_field = QtWidgets.QLineEdit()
+        self._sample_rate_field.setPlaceholderText("1200000 (default)")
+        form.addRow("Sample rate (Hz):", self._sample_rate_field)
+
+        gain_row = QtWidgets.QHBoxLayout()
+        self._gain_field = QtWidgets.QLineEdit()
+        self._gain_field.setPlaceholderText("30 (default)")
+        self._agc_field = QtWidgets.QCheckBox("AGC")
+        self._agc_field.setToolTip(
+            "Hardware automatic gain control. While on, the device ignores "
+            "Gain/Gain element. Not every board supports it."
+        )
+        self._agc_field.toggled.connect(self._on_agc_changed)
+        gain_row.addWidget(self._gain_field, 1)
+        gain_row.addWidget(self._agc_field)
+        form.addRow("Gain (dB):", gain_row)
+
+        self._gain_element_field = QtWidgets.QLineEdit()
+        self._gain_element_field.setPlaceholderText("PGA on a B210; empty = overall gain")
+        form.addRow("Gain element:", self._gain_element_field)
+
+        self._bandwidth_field = QtWidgets.QLineEdit()
+        self._bandwidth_field.setPlaceholderText("(follows sample rate)")
+        form.addRow("Bandwidth (Hz):", self._bandwidth_field)
+
+        device_args_row = QtWidgets.QHBoxLayout()
+        self._device_args_field = QtWidgets.QLineEdit()
+        self._device_args_field.setPlaceholderText("(auto-detect if only one USRP)")
         self._detect_button = QtWidgets.QPushButton("Detect SDRs")
         self._detect_button.clicked.connect(self._detect_sdrs)
-        profile_row.addWidget(QtWidgets.QLabel("Profile:"))
-        profile_row.addWidget(self._profile_combo, 1)
-        profile_row.addWidget(self._new_profile_button)
-        profile_row.addWidget(self._open_profile_button)
-        profile_row.addWidget(self._detect_button)
-        panel.addLayout(profile_row)
+        device_args_row.addWidget(self._device_args_field, 1)
+        device_args_row.addWidget(self._detect_button)
+        form.addRow("Device args:", device_args_row)
 
-        # Per-unit calibration, stored in the selected profile file itself.
-        calib_row = QtWidgets.QHBoxLayout()
         self._freq_err = QtWidgets.QLineEdit()
         self._freq_err.setPlaceholderText("(none)")
-        self._freq_err.setMaximumWidth(120)
-        self._freq_err.textChanged.connect(self._update_preview)
-        self._freq_err.editingFinished.connect(self._save_calibration_to_profile)
-        calib_row.addWidget(QtWidgets.QLabel("Freq err offset:"))
-        calib_row.addWidget(self._freq_err)
-        calib_row.addWidget(QtWidgets.QLabel("Hz — per-unit calibration, saved into the profile."))
-        calib_row.addStretch(1)
-        panel.addLayout(calib_row)
+        form.addRow("Freq err offset (Hz):", self._freq_err)
+
+        panel.addLayout(form)
+
+        self._sdr_field_widgets = {
+            "antenna": self._antenna_field,
+            "sample_rate": self._sample_rate_field,
+            "tuner_gain": self._gain_field,
+            "gain_element": self._gain_element_field,
+            "bandwidth": self._bandwidth_field,
+            "device_args": self._device_args_field,
+            "freq_err_offset": self._freq_err,
+        }
+        self._antenna_field.editTextChanged.connect(lambda _text: self._on_sdr_field_changed("antenna"))
+        for key, widget in self._sdr_field_widgets.items():
+            if widget is self._antenna_field:
+                continue
+            widget.textChanged.connect(lambda _text, k=key: self._on_sdr_field_changed(k))
 
         self._preview = QtWidgets.QPlainTextEdit()
         self._preview.setReadOnly(True)
@@ -416,11 +471,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._stop_button.setEnabled(running)
         self._services_only.setEnabled(not running)
         self._backend_args.setEnabled(not running)
-        self._profile_combo.setEnabled(not running)
-        self._new_profile_button.setEnabled(not running)
-        self._open_profile_button.setEnabled(not running)
-        self._detect_button.setEnabled(not running)
-        self._refresh_freq_field_enabled()
+        self._refresh_sdr_fields_enabled()
         self._refresh_squelch_controls_enabled()
 
     # --- settings panel ----------------------------------------------------
@@ -430,62 +481,24 @@ class MainWindow(QtWidgets.QMainWindow):
             QtCore.Qt.DownArrow if checked else QtCore.Qt.RightArrow
         )
 
-    # --- profiles (layer B: per-unit config files) ------------------------
-    def _current_profile_path(self):
-        """Selected profile path (str), or None for built-in defaults."""
-        return self._profile_combo.currentData()
+    # --- SDR settings form (single fixed settings file) --------------------
+    def _load_settings_into_form(self):
+        ensure_settings_file()
+        for key, widget in self._sdr_field_widgets.items():
+            text = _format_field_value(read_sdr_value(key))
+            widget.blockSignals(True)
+            if isinstance(widget, QtWidgets.QComboBox):
+                widget.setCurrentText(text)
+            else:
+                widget.setText(text)
+            widget.blockSignals(False)
 
-    def _append_profile_item(self, path):
-        self._profile_combo.addItem(f"{Path(path).stem} (external)", str(path))
+        self._agc_field.blockSignals(True)
+        self._agc_field.setChecked(bool(read_sdr_value("agc")))
+        self._agc_field.blockSignals(False)
+        self._gain_field.setEnabled(not self._agc_field.isChecked())
 
-    def _reload_profiles(self, select_path=None):
-        self._syncing_profile = True
-        self._profile_combo.clear()
-        self._profile_combo.addItem("(none — built-in defaults)", None)
-        for profile in list_profiles():
-            self._profile_combo.addItem(profile.name, str(profile.path))
-        for path in self._external_profiles:
-            self._append_profile_item(path)
-        self._syncing_profile = False
-        self._select_profile_path(select_path)
-
-    def _select_profile_path(self, path):
-        target = os.path.abspath(os.path.expanduser(path)) if path else ""
-        index = 0  # "(none)"
-        for candidate in range(1, self._profile_combo.count()):
-            data = self._profile_combo.itemData(candidate)
-            if data and target and os.path.abspath(data) == target:
-                index = candidate
-                break
-        else:
-            # A path outside the profiles dir: list it as an external entry.
-            if target and os.path.exists(target):
-                known = {os.path.abspath(p) for p in self._external_profiles}
-                if target not in known:
-                    self._external_profiles.append(target)
-                    self._append_profile_item(target)
-                    index = self._profile_combo.count() - 1
-        self._syncing_profile = True
-        self._profile_combo.setCurrentIndex(index)
-        self._syncing_profile = False
-        self._on_profile_changed()
-
-    def _on_profile_selected(self, _index):
-        if self._syncing_profile:
-            return
-        self._on_profile_changed()
-
-    def _on_profile_changed(self):
-        path = self._current_profile_path()
-        offset = read_freq_err_offset(path) if path else None
-        # Programmatic setText fires textChanged (-> preview), not editingFinished,
-        # so mirroring the file into the field does not write it straight back.
-        self._freq_err.setText("" if offset is None else f"{offset:g}")
-
-        squelch = read_squelch_threshold(path) if path else None
-        # blockSignals so seeding the slider from the file does not push a
-        # live control message (there is nothing running to push to anyway,
-        # since the profile combo is disabled while the stack is running).
+        squelch = read_demod_value("squelch_threshold")
         self._squelch_slider.blockSignals(True)
         self._squelch_slider.setValue(
             int(round(squelch if squelch is not None else DEFAULT_SQUELCH_THRESHOLD))
@@ -493,102 +506,68 @@ class MainWindow(QtWidgets.QMainWindow):
         self._squelch_slider.blockSignals(False)
         self._squelch_value_label.setText(f"{self._squelch_slider.value()} dB")
 
-        self._refresh_freq_field_enabled()
-        self._refresh_squelch_controls_enabled()
         self._update_preview()
 
-    def _refresh_freq_field_enabled(self):
-        # Calibration lives in the profile file, so it needs a selected profile.
-        has_profile = self._current_profile_path() is not None
-        self._freq_err.setEnabled((not self._running) and has_profile)
-        self._freq_err.setToolTip(
-            "" if has_profile else "Create or open a profile to save calibration."
-        )
+    def _field_text(self, key):
+        widget = self._sdr_field_widgets[key]
+        return widget.currentText() if isinstance(widget, QtWidgets.QComboBox) else widget.text()
+
+    def _parse_sdr_field(self, key):
+        """The field's value, coerced for storage. Raises ValueError if a
+        numeric field holds unparsable text."""
+        text = self._field_text(key).strip()
+        if not text:
+            return None
+        if key in _SDR_NUMERIC_FIELDS:
+            return float(text)
+        return text
+
+    def _validate_sdr_fields(self):
+        """Raises ValueError if any numeric field holds unparsable text."""
+        for key in _SDR_NUMERIC_FIELDS:
+            text = self._field_text(key).strip()
+            if text:
+                float(text)
+
+    def _on_sdr_field_changed(self, key):
+        try:
+            value = self._parse_sdr_field(key)
+        except ValueError:
+            self._update_preview()  # still show the "invalid number" warning
+            return
+        write_sdr_value(key, value)
+        self._update_preview()
+
+    def _on_agc_changed(self, checked):
+        write_sdr_value("agc", checked)
+        self._gain_field.setEnabled(not checked and not self._running)
+        self._update_preview()
+
+    def _refresh_sdr_fields_enabled(self):
+        enabled = not self._running
+        for widget in self._sdr_field_widgets.values():
+            widget.setEnabled(enabled)
+        self._agc_field.setEnabled(enabled)
+        self._gain_field.setEnabled(enabled and not self._agc_field.isChecked())
+        self._detect_button.setEnabled(enabled)
 
     def _refresh_squelch_controls_enabled(self):
         # The slider stays live (and enabled) while running -- that is the
         # whole point -- but it needs a managed backend to have any effect.
         manages_backend = not self._services_only.isChecked()
         self._squelch_slider.setEnabled(manages_backend)
-        has_profile = self._current_profile_path() is not None
-        self._squelch_save_button.setEnabled(manages_backend and has_profile)
-        self._squelch_save_button.setToolTip(
-            "Write the current value into the selected profile's [demod].squelch_threshold."
-            if has_profile else "Create or open a profile to save the squelch value."
-        )
+        self._squelch_save_button.setEnabled(manages_backend)
 
     def _on_squelch_changed(self, value):
         self._squelch_value_label.setText(f"{value} dB")
         if self._running and self.supervisor is not None:
             self.supervisor.set_squelch(float(value))
 
-    def _save_squelch_to_profile(self):
-        path = self._current_profile_path()
-        if path is None:
-            return
+    def _save_squelch_to_settings(self):
         try:
-            write_squelch_threshold(path, float(self._squelch_slider.value()))
+            write_demod_value("squelch_threshold", float(self._squelch_slider.value()))
         except OSError as exc:
-            QtWidgets.QMessageBox.warning(self, "Save squelch", f"Could not write to profile:\n{exc}")
-            return
-        self._update_preview()
-
-    def _new_profile_from_device(self):
-        presets = list_device_presets(self.repo_root / "devices")
-        if not presets:
-            QtWidgets.QMessageBox.warning(self, "New profile", "No device templates in devices/.")
-            return
-        names = [preset.name for preset in presets]
-        choice, ok = QtWidgets.QInputDialog.getItem(
-            self, "New profile", "Device template:", names, 0, False
-        )
-        if not ok:
-            return
-        preset = presets[names.index(choice)]
-        name, ok = QtWidgets.QInputDialog.getText(
-            self, "New profile", "Profile name:", text=Path(preset.path).stem
-        )
-        name = name.strip()
-        if not ok or not name:
-            return
-        try:
-            dest = create_profile(preset.path, name)
-        except FileExistsError:
-            resp = QtWidgets.QMessageBox.question(
-                self, "Overwrite?", f"A profile named '{name}' exists. Overwrite it?"
-            )
-            if resp != QtWidgets.QMessageBox.Yes:
-                return
-            (profiles_dir() / f"{name}.toml").unlink()
-            dest = create_profile(preset.path, name)
-        self._reload_profiles(select_path=str(dest))
-
-    def _open_other_profile(self):
-        path, _ = QtWidgets.QFileDialog.getOpenFileName(
-            self, "Open profile", str(profiles_dir()), "TOML config (*.toml);;All files (*)"
-        )
-        if path:
-            self._reload_profiles(select_path=path)
-
-    def _parse_freq_err(self):
-        """Field value as a float, or None if empty. Raises ValueError if invalid."""
-        text = self._freq_err.text().strip()
-        if not text:
-            return None
-        return float(text)
-
-    def _save_calibration_to_profile(self):
-        path = self._current_profile_path()
-        if path is None:
-            return
-        try:
-            value = self._parse_freq_err()
-        except ValueError:
-            return  # invalid text: leave the file untouched
-        try:
-            write_freq_err_offset(path, value)
-        except OSError as exc:
-            QtWidgets.QMessageBox.warning(self, "Save calibration", f"Could not write to profile:\n{exc}")
+            QtWidgets.QMessageBox.warning(self, "Save squelch", f"Could not write settings:\n{exc}")
             return
         self._update_preview()
 
@@ -601,16 +580,15 @@ class MainWindow(QtWidgets.QMainWindow):
             return
 
         try:
-            override = self._parse_freq_err()
-            freq_err_note = ""
+            self._validate_sdr_fields()
+            field_note = ""
         except ValueError:
-            override = None
-            freq_err_note = "Freq err offset must be a number."
+            field_note = "One of the SDR fields has an invalid number."
 
-        preview = preview_config(self._current_profile_path() or "", freq_err_offset_override=override)
-        if freq_err_note:
+        preview = preview_config(str(settings_path()))
+        if field_note:
             self._preview.setPlainText(preview.summary)
-            self._preview_note.setText(freq_err_note)
+            self._preview_note.setText(field_note)
             self._preview_note.setProperty("level", "warn")
             self._preview_note.style().unpolish(self._preview_note)
             self._preview_note.style().polish(self._preview_note)
@@ -637,34 +615,39 @@ class MainWindow(QtWidgets.QMainWindow):
             return
         if not devices:
             QtWidgets.QMessageBox.information(
-                self, "Detect SDRs", error or "No SoapySDR devices found."
+                self, "Detect SDRs", error or "No UHD devices found."
             )
             return
 
         lines = []
         for device in devices:
-            bits = [f"driver={device.driver}"]
+            bits = []
+            if device.device_type:
+                bits.append(f"type={device.device_type}")
             if device.label:
                 bits.append(f"label={device.label}")
             if device.serial:
                 bits.append(f"serial={device.serial}")
             lines.append("  • " + "  ".join(bits))
 
-        # Tell the user whether the selected profile's driver is present.
+        # Tell the user whether the settings' device_args names a serial that
+        # is actually among the connected devices (structured, not scraped
+        # from the preview text, since device_args is free-form UHD syntax).
         note = ""
-        path = self._current_profile_path()
-        if path:
-            config = preview_config(path)
-            if config.ok:
-                driver = config.summary.splitlines()[0].split("driver=")[-1].split(",")[0]
-                present = {device.driver for device in devices}
-                if driver in present:
-                    note = f"\nProfile driver '{driver}' is connected."
-                else:
-                    note = (
-                        f"\n⚠ Profile driver '{driver}' is NOT among the connected devices "
-                        f"({', '.join(sorted(present))})."
-                    )
+        try:
+            device_args = load_config_file(settings_path()).sdr.device_args
+        except Exception:
+            device_args = ""
+        present = {device.serial for device in devices if device.serial}
+        if device_args:
+            matched = next((serial for serial in present if serial in device_args), None)
+            if matched:
+                note = f"\nSettings device_args mentions connected serial '{matched}'."
+            elif present:
+                note = (
+                    f"\n⚠ Settings device_args ({device_args!r}) does not mention any "
+                    f"connected serial ({', '.join(sorted(present))})."
+                )
 
         QtWidgets.QMessageBox.information(
             self, "Detected SDRs", "\n".join(lines) + note
@@ -684,33 +667,23 @@ class MainWindow(QtWidgets.QMainWindow):
         backend_args = list(extra_args)
         if not services_only:
             try:
-                self._parse_freq_err()  # validate before writing / starting
+                self._validate_sdr_fields()
             except ValueError:
                 QtWidgets.QMessageBox.warning(
-                    self, "Cannot start", "Freq err offset must be a number (Hz), or empty."
+                    self, "Cannot start", "One of the SDR fields has an invalid number."
                 )
                 return
 
-            # The slider is a plain CLI override (not written to the profile
-            # unless Save is clicked), so Start always uses exactly what it
-            # shows, whether or not that has been persisted yet.
-            squelch_args = ["--squelch", str(self._squelch_slider.value())]
+            # Flush anything not yet written (e.g. a field mid-edit that never
+            # lost focus) before the backend reads the settings file.
+            for key in self._sdr_field_widgets:
+                self._on_sdr_field_changed(key)
 
-            path = self._current_profile_path()
-            if path is not None:
-                if not os.path.exists(os.path.expanduser(path)):
-                    QtWidgets.QMessageBox.critical(
-                        self, "Cannot start", f"Profile not found:\n{path}"
-                    )
-                    return
-                # The profile file is the source of truth: fold the field into it,
-                # then the backend reads the calibration from --config.
-                self._save_calibration_to_profile()
-                backend_args = ["--config", str(path), *squelch_args, *extra_args]
-                self._settings.setValue("profile_path", str(path))
-            else:
-                backend_args = [*squelch_args, *extra_args]
-                self._settings.setValue("profile_path", "")
+            # The slider is a plain CLI override (not written to the settings
+            # file unless Save is clicked), so Start always uses exactly what
+            # it shows, whether or not that has been persisted yet.
+            squelch_args = ["--squelch", str(self._squelch_slider.value())]
+            backend_args = ["--config", str(settings_path()), *squelch_args, *extra_args]
 
         supervisor = StackSupervisor(
             repo_root=self.repo_root,

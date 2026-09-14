@@ -19,10 +19,11 @@ import signal
 from gnuradio.filter import pfb
 import std_t98_multi_sync as sync_word_corr  # embedded python block
 import threading
+import time
 
 from firdes import make_rx_taps
 from core.rf.backend_config import BackendConfig, derive_rates
-from core.rf.soapy_source import open_source
+from core.rf.uhd_source import OverflowTap, collect_health_snapshot, open_source
 
 class test3(gr.top_block):
 
@@ -43,9 +44,6 @@ class test3(gr.top_block):
         self.freq_err_offset = freq_err_offset = sdr_cfg.resolved_freq_err_offset()
 
         self.sdr_tuner_gain = sdr_tuner_gain = sdr_cfg.tuner_gain
-        self.sdr_agc_enabled = sdr_agc_enabled = sdr_cfg.agc
-        self.sdr_biastee_enabled = sdr_biastee_enabled = sdr_cfg.bias_tee
-        self.sdr_freq_corr = sdr_freq_corr = sdr_cfg.freq_correction
 
         ##################################################
         # 2. Resampling & Channelization Rates (derived from sample rate)
@@ -134,14 +132,11 @@ class test3(gr.top_block):
                 gr.sizeof_gr_complex, samp_rate_post_resamp1, True, 0)
         else:
             self._source = open_source(sdr_cfg)
-            self.soapy_source_0 = self._source.source
-
-            # Names kept for anything that reached into the flowgraph before
-            # the device handling moved into core.rf.soapy_source.
-            self.set_soapy_source_0_gain_mode = self._source.set_gain_mode
-            self.set_soapy_source_0_gain = self._source.set_gain
-            self.set_soapy_source_0_bias = self._source.set_bias
-            self.soapy_rtlsdr_source_0 = self.soapy_source_0
+            self.uhd_source_0 = self._source.source
+            # Tapped right at the source so it sees UHD's own stream-time
+            # tags before any resampling/channelization could shift or drop
+            # them -- see core.rf.uhd_source.OverflowTap.
+            self.overflow_tap = OverflowTap()
 
         self.blocks_freqshift_cc_0 = blocks.rotator_cc(rotator_phase_inc)
 
@@ -225,7 +220,8 @@ class test3(gr.top_block):
             # No throttle here: the SDR's sample clock already paces the
             # flowgraph, and GNU Radio's throttle is explicitly not meant to
             # share a graph with a hardware source.
-            self.connect((self.soapy_source_0, 0), (self.blocks_freqshift_cc_0, 0))
+            self.connect((self.uhd_source_0, 0), (self.overflow_tap, 0))
+            self.connect((self.overflow_tap, 0), (self.blocks_freqshift_cc_0, 0))
             self.connect((self.blocks_freqshift_cc_0, 0), (self.rational_resampler_1, 0))
             self.connect((self.rational_resampler_1, 0), (self.pfb_channelizer_ccf_0, 0))
 
@@ -285,13 +281,47 @@ def _run_control_loop(tb, socket_path):
         tb.set_squelch_threshold(packet.threshold_db)
 
 
+HEALTH_CHECK_INTERVAL_SEC = 5.0
+
+
+def _run_health_check_loop(tb):
+    """Background thread: periodically self-check the live UHD device.
+
+    Unlike "a frame arrived once," this re-reads the device's own state
+    (sample rate / frequency / antenna actually in effect, LO lock, whatever
+    sensors this board exposes) and folds in the overflow tap's count, so a
+    silently degraded receiver (drifted setting, unlocked LO, dropped
+    samples from USB contention) shows up instead of looking identical to a
+    healthy one. Publishes on the same status socket sync_word_correlator
+    already uses (STATUS_SOURCE_RF), so no new IPC plumbing is needed.
+    """
+    from core.pipeline.runtime_status import StatusPublisher
+    from ipc.message_schema import STATUS_SOURCE_RF
+    from ipc.transport.uds_seqpacket import resolve_status_socket_path
+
+    publisher = StatusPublisher(socket_path=resolve_status_socket_path(), source=STATUS_SOURCE_RF)
+
+    time.sleep(1.0)  # let the device settle before the first read
+    while True:
+        snapshot = collect_health_snapshot(tb.uhd_source_0, tb.config.sdr)
+
+        discontinuities = tb.overflow_tap.discontinuity_count
+        snapshot["stream_discontinuities"] = discontinuities
+        if discontinuities:
+            snapshot["ok"] = False
+            snapshot["summary"] += f" | {discontinuities} stream discontinuities (overflow?)"
+
+        publisher.publish(payload_dict={"event": "health", **snapshot})
+        time.sleep(HEALTH_CHECK_INTERVAL_SEC)
+
+
 def _parse_args(argv=None):
     import argparse
 
     from core.rf.backend_config import add_config_arguments
 
     parser = argparse.ArgumentParser(
-        description="STD-T98 30ch multi-channel RF backend (SoapySDR)."
+        description="STD-T98 30ch multi-channel RF backend (UHD/USRP)."
     )
     add_config_arguments(parser)
     parser.add_argument(
@@ -319,14 +349,13 @@ def _print_dry_run(config):
     print("[sdr]")
     for field_name in config.sdr.__dataclass_fields__:
         print(f"  {field_name} = {getattr(config.sdr, field_name)!r}")
-    # Resolved view of the two settings that decide whether the device opens
-    # at all, so a failing driver can be diagnosed without starting the SDR.
+    # Resolved view of the settings that decide whether the device opens at
+    # all, so a failing device address can be diagnosed without starting it.
     print("[sdr.resolved]")
     print(f"  device_string = {config.sdr.device_string()!r}")
     print(f"  freq_err_offset = {config.sdr.resolved_freq_err_offset():+.1f} Hz")
     print(f"  tuned_freq = {config.sdr.tuned_freq():.0f} Hz")
-    print(f"  stream_args = {config.sdr.resolved_stream_args()!r}")
-    print(f"  antenna = {config.sdr.antenna or '(driver default)'}")
+    print(f"  antenna = {config.sdr.antenna or '(device default)'}")
     bandwidth = config.sdr.resolved_bandwidth()
     print(f"  bandwidth = {bandwidth if bandwidth else '(device default)'}")
     print("[demod]")
@@ -362,6 +391,10 @@ def main(top_block_cls=test3, options=None):
             target=_run_control_loop, args=(tb, args.control_socket), daemon=True
         )
         control_thread.start()
+
+    if not args.replay:
+        health_thread = threading.Thread(target=_run_health_check_loop, args=(tb,), daemon=True)
+        health_thread.start()
 
     def sig_handler(sig=None, frame=None):
         tb.stop()

@@ -11,8 +11,8 @@ The tap is after the stage-1 resampler, at pfb_num_channels * channel_spacing
 (300 kHz by default), stored as interleaved complex float32 -- the format
 GNU Radio's file source and numpy both read directly.
 
-    python3 tools/std_t98_record_iq.py --driver uhd --sample-rate 2000000 \\
-        --antenna TX/RX --gain-element PGA --no-agc --gain 10 \\
+    python3 tools/std_t98_record_iq.py --sample-rate 2000000 \\
+        --antenna TX/RX --gain-element PGA --gain 30 \\
         --freq-err-offset 1030 --seconds 30 -o capture.cf32
 """
 
@@ -28,7 +28,7 @@ from gnuradio.fft import window
 from gnuradio.filter import pfb
 
 from core.rf.backend_config import add_config_arguments, derive_rates, load_config
-from core.rf.soapy_source import open_source
+from core.rf.uhd_source import open_source
 
 
 class Recorder(gr.top_block):

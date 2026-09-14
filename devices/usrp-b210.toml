@@ -1,13 +1,11 @@
 # USRP B210
-# Ettus/LibreSDR B210 over the uhd SoapySDR driver.
+# Ettus/LibreSDR B210 over UHD.
 # freq_err_offset is per-unit calibration and is intentionally omitted -- measure
 # it for your own radio (see README 周波数校正) and set it in a copy of this file.
 [sdr]
-driver = "uhd"
 sample_rate = 2000000
 # B210 exposes TX/RX and RX2 and defaults to RX2; set the port you patched.
 antenna = "TX/RX"
-agc = false
 tuner_gain = 30
 # B210 manual-gain element (0-76 dB); "" would drive the overall gain instead.
 gain_element = "PGA"

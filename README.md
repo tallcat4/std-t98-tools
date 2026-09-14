@@ -3,7 +3,7 @@
 ARIB STD-T98（デジタル簡易無線, 351 MHz 帯）の信号を SDR で受信し、30 チャンネルを並列に復調・復号して音声再生する GNU Radio / Python ツール群です。
 
 - **マルチチャネル**: 30 チャンネルを同時に復調・監視・再生
-- **マルチ SDR**: SoapySDR 対応デバイスなら RTL-SDR / USRP / HackRF / Airspy などを設定だけで切り替え
+- **USRP (UHD) 専用**: `gnuradio.uhd` でUSRPを直接駆動し、サンプルレート/周波数/アンテナのライブ自己診断やストリーム途切れ検知など、UHD ネイティブの情報を活用
 - **フルスタック**: RF 受信からプロトコル解析、AMBE 音声復号、音声出力まで
 - **診断ツール同梱**: SDR なしでも録音から全経路を検証できる受け入れテスト
 
@@ -34,7 +34,7 @@ ARIB STD-T98（デジタル簡易無線, 351 MHz 帯）の信号を SDR で受�
 
 | プロセス | 役割 |
 | --- | --- |
-| `std_t98_30ch_multi_rf_backend.py` | SoapySDR で SDR を駆動し、PFB チャンネライザで 30ch を並列復調、シンボル同期・同期語検出まで行う |
+| `std_t98_30ch_multi_rf_backend.py` | UHD で USRP を駆動し、PFB チャンネライザで 30ch を並列復調、シンボル同期・同期語検出まで行う |
 | `std_t98_multi_protocol_service.py` | フレームをデホワイトニングし、RICH / SACCH / PICH / TCH を解析 |
 | `std_t98_multi_audio_service.py` | 音声バーストを AMBE 復号し、PCM 化・チャネル間ミックス・再生 |
 | `std_t98_multi_secret_service.py` | 学習済みモデルで秘話鍵を推定し、音声スクランブルを解除 |
@@ -49,7 +49,7 @@ ARIB STD-T98（デジタル簡易無線, 351 MHz 帯）の信号を SDR で受�
 
 | 区分 | 対象 | 依存 |
 | --- | --- | --- |
-| RF 系 | backend / protocol | GNU Radio（`gnuradio.soapy` 込み）、SoapySDR + デバイスモジュール、numpy |
+| RF 系 | backend / protocol | GNU Radio（`gnuradio.uhd` 込み）、UHD（`libuhd` + `uhd-host`）、numpy |
 | 音声系 | audio | sounddevice（+ PortAudio）、pyambelib、numpy |
 | 秘話系 | secret | torch、safetensors |
 | GUI | デスクトップ front-end | PyQt5 |
@@ -61,18 +61,19 @@ GUI（デスクトップ front-end）は任意で、端末の launcher と同じ
 
 動作を確認済みの組み合わせ:
 
-| OS | Python | GNU Radio | SoapySDR |
+| OS | Python | GNU Radio | UHD |
 | --- | --- | --- | --- |
-| Ubuntu 24.04 | 3.12.3 | 3.10.9.2 | 0.8.1 (API 0.8.0) |
+| Arch Linux | 3.14 | 3.10.12 | 4.9.0 |
 
 ## インストール
 
-GNU Radio と SoapySDR は PyPI に無いため、先にディストリのパッケージ（または [radioconda](https://github.com/ryanvolz/radioconda)）で導入します。SDR のモジュールは使う機種のものだけで十分です。
+GNU Radio と UHD は PyPI に無いため、先にディストリのパッケージ（または [radioconda](https://github.com/ryanvolz/radioconda)）で導入します。
 
 ```bash
 # Debian / Ubuntu の例
-sudo apt install gnuradio libsoapysdr0.8 soapysdr-tools libportaudio2 \
-    soapysdr-module-rtlsdr soapysdr-module-uhd soapysdr-module-hackrf
+sudo apt install gnuradio gnuradio-dev libuhd-dev uhd-host libportaudio2
+# ファームウェア/FPGAイメージの取得（初回のみ）
+sudo uhd_images_downloader
 ```
 
 残りは `setup.sh` が用意します。service 用の `env/` を作り、音声系と `pyambelib`（ソースからビルド）を導入し、RF 系が使えるかを確認します。root は不要で、システム Python には触れず、再実行しても安全です。
@@ -109,8 +110,8 @@ git clone https://github.com/tallcat4/pyambelib
 導入後、RF 環境と SDR の疎通を確認できます。
 
 ```bash
-python3 -c "from gnuradio import gr, soapy; print(gr.version())"
-SoapySDRUtil --find     # 接続中の SDR とデバイス引数を表示
+python3 -c "from gnuradio import gr, uhd; print(gr.version())"
+uhd_find_devices     # 接続中の USRP とシリアル/機種を表示
 ```
 
 ## クイックスタート
@@ -120,16 +121,16 @@ launcher が全プロセスを起動します。SDR の設定は設定ファイ�
 ```bash
 # 設定を書く（例）: ~/std-t98.toml
 #   [sdr]
-#   driver = "uhd"
 #   sample_rate = 2000000
 #   antenna = "TX/RX"
+#   gain_element = "PGA"
 #   [demod]
 #   squelch_threshold = -40
 
 STD_T98_BACKEND_CONFIG=~/std-t98.toml python3 std_t98_multi_service_launcher.py
 ```
 
-RTL-SDR を既定設定で使う場合は、設定ファイルなしでそのまま起動できます。
+USRP を1台だけ繋いでいる場合は、設定ファイルなしでもそのまま起動できます（既定は 1.2 MHz サンプルレート）。
 
 ```bash
 python3 std_t98_multi_service_launcher.py
@@ -147,20 +148,23 @@ python3 -m app          # または ./std_t98_gui.py
 
 PyQt5 が必要です（GNU Radio の Qt GUI に含まれるため、RF 環境が入っていれば追加インストールは不要）。ウィンドウの Start / Stop でスタックを起動・停止し、子プロセスが終了した場合は理由を表示します。
 
-設定は折りたたみ式の Settings パネルで扱います（Start すると自動的に畳まれます）。設定は 3 層に分かれます。
+対応機種は USRP（UHD）専用なので、選ぶべき機種テンプレートやプロファイルファイルはありません。設定は折りたたみ式の Settings パネルにあるフォームで**直接編集**し、単一の固定ファイル `~/.config/std-t98/settings.toml` へ即座に保存されます（Start すると自動的に畳まれます）。
 
-- **機種テンプレート（[`devices/*.toml`](devices/README.md)）**: 対応機種の既定値。リポジトリ収録・不変・共有で、個体固有値は持ちません。
-- **プロファイル（個体設定）**: 実運用で使う TOML。機種テンプレートから **New from device…** でコピーして作り、既定では `~/.config/std-t98/profiles/` に保存されます（**Open other…** で任意の場所の TOML も使えます）。周波数校正などの個体固有値はこのファイルに入ります。
-- **実行時オプション**: `--replay` 等の一時指定。**Backend** 欄に入れます（保存されません）。
+パネルの各項目（すべて `[sdr]` の値を直接編集）:
 
-パネルの各項目:
+- **Antenna**: RX ポート（B210 は `TX/RX` / `RX2`）。空欄はデバイス既定。
+- **Sample rate (Hz)**
+- **Gain (dB)** / **AGC**: AGC を有効にすると手動ゲインは無視されます（対応していない機種もあります）。AGC中はGain欄がグレーアウトします。
+- **Gain element**: UHD の named gain stage 名（B210 は `PGA`）。空欄で overall gain。
+- **Bandwidth (Hz)**: 空欄でサンプルレートに追従。
+- **Device args**: 複数 USRP 接続時の `serial=...` 選択など、上級者向け。
+- **Freq err offset (Hz)**: 個体ごとの周波数校正値。
 
-- **Profile**: 使うプロファイルを選択します（`(none)` は内蔵既定値で起動）。選ぶと解決結果（driver / レート / 同調周波数 / アンテナ / 帯域 など）をその場でプレビューし、ファイルが無ければ起動前に警告します。起動時に backend へ渡すのは `--config <profile>` だけです。前回のプロファイルは記憶され、初回は `STD_T98_BACKEND_CONFIG` があればそれを取り込みます。
-- **Freq err offset**: 個体ごとの周波数校正値（Hz）。**選択中のプロファイルの `[sdr].freq_err_offset` に書き込まれます**（テキストとして残るので目視・編集・可搬）。次回そのプロファイルを選ぶとファイルから復元します。プロファイル未選択（内蔵既定）のときは、書き込む先が無いため無効です。
-- **Detect SDRs**: 接続中の SoapySDR デバイスを一覧し、プロファイルの driver が実際に繋がっているかを確認します。
-- **Backend**: `--replay` などの追加引数を渡せます（`--config` の後に付与するので、ここで明示すれば上書きできます）。
+編集すると即座にファイルへ書き込まれ、解決結果（レート / 同調周波数 / アンテナ / 帯域など）がその場でプレビューされます。数値欄に不正な値を入れている間はファイルへ書き込まれず（直前の有効値が残ります）、警告が表示されます。**Detect SDRs** ボタンは接続中の USRP を一覧し、`device_args` が実際に繋がっているシリアルを指しているかを確認します。**Backend** 欄には `--replay` などの一時的な追加引数を渡せます（保存されません）。
 
-設定パネルの外、常時表示のコントロール行には **Squelch** スライダーがあります。スケルチ (`[demod].squelch_threshold`) は SDR のゲイン設定によって適正値が変わり、外れていると音もエラーも無いまま全チャンネルが無音化する値なので（→ [新しい SDR で注意する項目](#新しい-sdr-で注意する項目)）、録音の再生や再起動を挟まずに **受信中でも動かして即座に効果を確認**できるようにしてあります。Start 時点のスライダー値がそのまま backend に `--squelch` として渡され、動作中の変更は制御ソケット経由でフローグラフへライブ反映されます。良い値が見つかったら **Save** でプロファイルの `[demod].squelch_threshold` に書き込めます（選択中のプロファイルが無いと無効）。
+設定パネルの外、常時表示のコントロール行には **Squelch** スライダーがあります。スケルチ (`[demod].squelch_threshold`) は SDR のゲイン設定によって適正値が変わり、外れていると音もエラーも無いまま全チャンネルが無音化する値なので（→ [新しい機種で注意する項目](#新しい機種で注意する項目)）、録音の再生や再起動を挟まずに **受信中でも動かして即座に効果を確認**できるようにしてあります。Start 時点のスライダー値がそのまま backend に `--squelch` として渡され、動作中の変更は制御ソケット経由でフローグラフへライブ反映されます。良い値が見つかったら **Save** で設定ファイルの `[demod].squelch_threshold` に書き込めます。
+
+プロセス一覧の各行には、生死だけでなく **Health** も表示されます。backend 行は「プロセスが生きている」と「実際に UHD デバイスからストリーミングできている」を区別します（起動直後は STARTING のまま留まり、フローグラフが最初のサンプルを処理して初めて RUNNING に上がります — B210 の FPGA ロードや USB 再列挙に時間がかかっても、それを「動いているのに応答なし」と誤認しません）。RUNNING 後も数秒おきに実機へ再問い合わせし（サンプルレート・周波数・アンテナの設定ドリフト、LO ロック、温度・RSSI などのセンサー、UHD が報告するストリーム途切れ）、異常を検知すると RUNNING のままアンバー表示に切り替わります。
 
 #### デスクトップに登録
 
@@ -185,7 +189,7 @@ PyQt5 が必要です（GNU Radio の Qt GUI に含まれるため、RF 環境�
 
 ## SDR 設定
 
-backend は SoapySDR 経由で SDR を駆動するため、対応ドライバがあれば機種を問わず切り替えられます。設定の優先順位は **組み込み既定値 → 設定ファイル（`--config` または `STD_T98_BACKEND_CONFIG`）→ CLI 引数** で、後のものが前を上書きします。既定値は RTL-SDR / 1.2 MHz の従来挙動を再現します。全項目のひな形は `config.example.toml` にあります。
+backend は UHD 経由で USRP を直接駆動します。設定の優先順位は **組み込み既定値 → 設定ファイル（`--config` または `STD_T98_BACKEND_CONFIG`）→ CLI 引数** で、後のものが前を上書きします。全項目のひな形は `config.example.toml` にあります。
 
 チャンネライザのレートはサンプルレートから自動導出され、STD-T98 の 6.25 kHz ラスタを保つよう計算されます。`sample_rate` を変えても PFB ビン幅は 6.25 kHz に保たれます。
 
@@ -195,21 +199,20 @@ backend は SoapySDR 経由で SDR を駆動するため、対応ドライバが
 python3 std_t98_30ch_multi_rf_backend.py --config myradio.toml --dry-run
 ```
 
-主な CLI 引数: `--driver` / `--device-args` / `--stream-args` / `--sample-rate` / `--freq` / `--gain` / `--gain-element` / `--antenna` / `--bandwidth` / `--agc` / `--no-agc` / `--freq-err-offset` / `--squelch` / `--config` / `--dry-run`。
+主な CLI 引数: `--device-args` / `--sample-rate` / `--freq` / `--gain` / `--gain-element` / `--agc` / `--no-agc` / `--antenna` / `--bandwidth` / `--freq-err-offset` / `--squelch` / `--config` / `--dry-run`。
 
-### 新しい SDR で注意する項目
+### 新しい機種で注意する項目
 
-RTL-SDR 以外を使う際、機種によって調整が要る主な項目です。いずれも既定は RTL-SDR 向けで、他機では自動で無難な値に切り替わるか、設定が必要です。
+B210 以外の USRP を使う際、機種によって調整が要る主な項目です。いずれも既定は B210 相当で、他機種では設定が必要な場合があります。
 
-- **アンテナ (`--antenna`)**: RX ポートが複数ある機種で受信端子を選びます。USRP B210 系は `TX/RX` と `RX2` を持ち、既定は `RX2`。**挿した端子と一致していないと、エラーも出ないまま何も受信しません。** 存在しない名前は起動時に候補付きで拒否されます。
-- **サンプルレート (`--sample-rate`)**: 対応レートは機種依存です。非対応値を指定すると、そのデバイスで使える近いレートを提示して停止します。端数を持つ公称値（例 `1230769.23…`）には丸めた値からスナップします。
+- **アンテナ (`--antenna`)**: RX ポートが複数ある機種で受信端子を選びます。B210 は `TX/RX` と `RX2` を持ち、既定は `RX2`。**挿した端子と一致していないと、エラーも出ないまま何も受信しません。** 存在しない名前は起動時に候補付きで拒否されます（起動後も数秒おきの自己診断で再チェックされます）。
+- **サンプルレート (`--sample-rate`)**: 対応レートはマスタークロックの分周比で決まるため機種ごとに離散的です。要求値は自動的に対応レートへスナップされます。
 - **周波数誤差 (`--freq-err-offset`)**: 個体ごとの実測校正値で、機種をまたいで流用できません。ずれていると同期語を検出できません。許容は約 ±333 Hz。→ [周波数校正](#周波数校正)
-- **スケルチ (`--squelch`)**: 絶対レベル（dB）のため、SDR のゲイン・スケーリングに依存します。高すぎると全チャンネルが無音化されます。ゲインより閾値側に余裕を持たせるのが確実です。
-- **アナログ帯域幅 (`--bandwidth`)**: 未指定なら RTL-SDR 以外はサンプルレートに追従させます（RTL-SDR は自前で設定）。設定しないと折り返し混入の原因になります。
-- **デバイス選択 (`--device-args`)**: 同型機が複数ある場合などに `serial=...` や `type=b200` を渡します。`driver=<driver>,<device_args>` として連結されます。
-- **ストリーム引数 (`--stream-args`)**: RTL-SDR には既定で `bufflen=16384`、他機には何も渡しません（非対応の引数はソース生成に失敗するため）。
+- **スケルチ (`--squelch`)**: 絶対レベル（dB）のため、SDR のゲイン・スケーリングに依存します。高すぎると全チャンネルが無音化されます。ゲインより閾値側に余裕を持たせるのが確実です。デスクトップ GUI ならスケルチスライダーで受信中に調整できます。
+- **アナログ帯域幅 (`--bandwidth`)**: 未指定ならサンプルレートに追従させます。設定しないと（あるいは追従させないと）折り返し混入の原因になります。
+- **デバイス選択 (`--device-args`)**: 同型機が複数ある場合などに `serial=...` や `type=b200` を渡します。
 
-ゲイン要素名 (`gain_element`) は RTL-SDR で `TUNER`、無い機種や空文字ではデバイス全体のゲインになります。bias tee・周波数補正 (ppm) は対応機種でのみ適用され、非対応でもエラーにはなりません。
+ゲイン要素名 (`gain_element`) は機種ごとの UHD named gain stage 名です（B210 は `PGA`）。空文字 `""` はデバイス全体のゲインになります。
 
 ## 診断とトラブルシューティング
 
@@ -279,12 +282,13 @@ python3 std_t98_multi_service_launcher.py \
 
 受信できないときは次の順で確認します。
 
-1. `SoapySDRUtil --find` — デバイスが見えるか
-2. `--dry-run` の `[sdr.resolved]` — device string / stream args / antenna / bandwidth が意図どおりか
+1. `uhd_find_devices` — デバイスが見えるか
+2. `--dry-run` の `[sdr.resolved]` — device string / antenna / bandwidth が意図どおりか
 3. backend が例外なく走り続けるか（レート非対応なら起動時に候補付きで停止）
-4. **アンテナ端子と `--antenna` が一致しているか**（不一致だと無警告で受信ゼロ）
-5. スケルチが高すぎないか（`--no-squelch` で切り分け）
-6. それでも `sync=0` なら、単にその時間帯に送信が無い可能性
+4. **アンテナ端子と `--antenna` が一致しているか**（不一致だと無警告で受信ゼロ）— デスクトップ GUI や `--show-debug-metrics` の Health 表示でも `antenna_ok` としてライブに検知されます
+5. Health 表示（GUI のプロセス行 / 端末の `--show-debug-metrics`）が `drift:` を報告していないか（サンプルレート・周波数・LO ロックのずれ、ストリーム途切れ）
+6. スケルチが高すぎないか（`--no-squelch` で切り分け、または GUI のスケルチスライダーで受信中に調整）
+7. それでも `sync=0` なら、単にその時間帯に送信が無い可能性
 
 ### 音声の不具合
 

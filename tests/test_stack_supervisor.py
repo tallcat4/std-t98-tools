@@ -178,3 +178,53 @@ def test_set_squelch_sends_encoded_packet_to_control_server():
 
     assert sup.set_squelch(-42.5) is True
     assert sent == [ControlSquelchPacket(threshold_db=-42.5).encode()]
+
+
+def test_health_payload_folds_into_process_view():
+    aggregator = StatusAggregator()
+    aggregator.set_process_views([
+        ProcessView(name="backend", python_executable="/x", script_name="backend.py"),
+    ])
+
+    healthy = StatusPacket.from_dict(
+        sequence=0, monotonic_ns=0, source=STATUS_SOURCE_RF, channel_id=0,
+        payload_dict={"event": "health", "ok": True, "summary": "OK"},
+    )
+    assert aggregator.apply_packet(healthy) is True
+    backend_view = aggregator.process_views[0]
+    assert backend_view.health_ok is True
+    assert backend_view.health == "OK"
+
+    degraded = StatusPacket.from_dict(
+        sequence=1, monotonic_ns=0, source=STATUS_SOURCE_RF, channel_id=0,
+        payload_dict={"event": "health", "ok": False, "summary": "drift: antenna"},
+    )
+    assert aggregator.apply_packet(degraded) is True
+    assert backend_view.health_ok is False
+    assert backend_view.health == "drift: antenna"
+
+    # Re-applying the same payload is a no-op (nothing changed).
+    assert aggregator.apply_packet(degraded) is False
+
+
+def test_health_payload_does_not_touch_service_metrics_detail():
+    aggregator = StatusAggregator()
+    aggregator.set_process_views([
+        ProcessView(name="backend", python_executable="/x", script_name="backend.py"),
+    ])
+
+    metrics = StatusPacket.from_dict(
+        sequence=0, monotonic_ns=0, source=STATUS_SOURCE_RF, channel_id=0,
+        payload_dict={"event": "service_metrics", "summary": "sync=1 ipc=1/0"},
+    )
+    aggregator.apply_packet(metrics)
+
+    health = StatusPacket.from_dict(
+        sequence=1, monotonic_ns=0, source=STATUS_SOURCE_RF, channel_id=0,
+        payload_dict={"event": "health", "ok": True, "summary": "OK"},
+    )
+    aggregator.apply_packet(health)
+
+    backend_view = aggregator.process_views[0]
+    assert backend_view.detail == "sync=1 ipc=1/0"
+    assert backend_view.health == "OK"

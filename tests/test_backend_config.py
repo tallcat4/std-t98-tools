@@ -14,7 +14,6 @@ from core.rf.backend_config import (
     apply_cli_overrides,
     build_channel_map,
     derive_rates,
-    nearest_sample_rates,
     load_config,
     load_config_file,
 )
@@ -62,7 +61,7 @@ class DeriveRatesTest(unittest.TestCase):
         )
 
     def test_non_integer_rate_bin_width_within_tolerance(self):
-        sdr = replace_sample_rate(2_048_000.0)  # common RTL-SDR rate
+        sdr = replace_sample_rate(2_048_000.0)
         rates = derive_rates(sdr, ChannelizerConfig())
         effective = sdr.sample_rate * rates.resamp1_interp / rates.resamp1_decim
         self.assertAlmostEqual(effective / rates.pfb_num_channels, 6250.0, delta=0.01)
@@ -79,17 +78,6 @@ class DeriveRatesTest(unittest.TestCase):
 
 
 class SampleRateSuitabilityTest(unittest.TestCase):
-    # A real USRP B210 rate list around this repo's 1.2 MHz default, which the
-    # B210 cannot serve.
-    B210_RATES = [
-        1_000_000.0,
-        1_066_666.666667,
-        1_142_857.142857,
-        1_230_769.230769,
-        1_333_333.333333,
-        2_000_000.0,
-    ]
-
     def test_defaults_hit_the_raster_exactly(self):
         rates = derive_rates(SdrConfig(), ChannelizerConfig())
         self.assertEqual(rates.bin_width_error_hz, 0.0)
@@ -102,38 +90,18 @@ class SampleRateSuitabilityTest(unittest.TestCase):
                 rates = derive_rates(SdrConfig(sample_rate=rate), ChannelizerConfig())
                 self.assertLess(abs(rates.bin_width_error_hz), 1.0)
 
-    def test_suggestions_are_ordered_by_closeness(self):
-        # 1066666.67 and 1333333.33 are equidistant from 1.2 MHz; the lower
-        # rate wins the tie, since it costs less to process.
-        picked = nearest_sample_rates(self.B210_RATES, 1_200_000.0, count=3)
-        self.assertEqual(
-            picked, [1_230_769.230769, 1_142_857.142857, 1_066_666.666667]
-        )
-
-    def test_suggestions_ignore_nonsense_rates(self):
-        self.assertEqual(nearest_sample_rates([0.0, -1.0], 1_200_000.0), [])
-
 
 class FreqErrOffsetTest(unittest.TestCase):
-    def test_rtlsdr_keeps_its_measured_calibration(self):
-        self.assertEqual(SdrConfig().resolved_freq_err_offset(), -340.0)
-        self.assertEqual(SdrConfig().tuned_freq(), 351_293_750 - 340)
-
-    def test_other_drivers_start_from_zero(self):
-        # -340 Hz was measured on one RTL-SDR. On another radio it is 1.24
-        # symbol units of DC, which alone exceeds the sync SSE threshold.
-        for driver in ("uhd", "hackrf", "airspy"):
-            with self.subTest(driver=driver):
-                sdr = SdrConfig(driver=driver)
-                self.assertEqual(sdr.resolved_freq_err_offset(), 0.0)
-                self.assertEqual(sdr.tuned_freq(), 351_293_750)
+    def test_default_is_zero(self):
+        self.assertEqual(SdrConfig().resolved_freq_err_offset(), 0.0)
+        self.assertEqual(SdrConfig().tuned_freq(), 351_293_750)
 
     def test_explicit_calibration_wins(self):
-        sdr = SdrConfig(driver="uhd", freq_err_offset=1030.0)
+        sdr = SdrConfig(freq_err_offset=1030.0)
         self.assertEqual(sdr.tuned_freq(), 351_293_750 + 1030)
 
-    def test_zero_disables_the_rtlsdr_default(self):
-        sdr = SdrConfig(driver="rtlsdr", freq_err_offset=0)
+    def test_zero_disables_it_explicitly(self):
+        sdr = SdrConfig(freq_err_offset=0)
         self.assertEqual(sdr.resolved_freq_err_offset(), 0.0)
 
 
@@ -159,26 +127,22 @@ class SquelchTest(unittest.TestCase):
             config = load_config_file(path)
         self.assertEqual(config.demod.squelch_threshold, -55.0)
         # Untouched sections keep their defaults.
-        self.assertEqual(config.sdr.driver, "rtlsdr")
+        self.assertEqual(config.sdr.device_args, "")
 
 
 class BandwidthTest(unittest.TestCase):
-    def test_rtlsdr_is_left_alone(self):
-        # RTL-SDR tracks its filter to the rate; touching it would change
-        # long-standing behaviour.
-        self.assertIsNone(SdrConfig().resolved_bandwidth())
-
-    def test_other_drivers_get_the_sample_rate(self):
-        # A B210 otherwise sits at its full 56 MHz and aliases everything in.
-        sdr = SdrConfig(driver="uhd", sample_rate=2_000_000.0)
+    def test_default_follows_sample_rate(self):
+        # A USRP otherwise sits at its full front-end bandwidth no matter how
+        # slowly you sample, aliasing everything in.
+        sdr = SdrConfig(sample_rate=2_000_000.0)
         self.assertEqual(sdr.resolved_bandwidth(), 2_000_000.0)
 
     def test_explicit_bandwidth_wins(self):
-        sdr = SdrConfig(driver="uhd", sample_rate=2_000_000.0, bandwidth=4_000_000.0)
+        sdr = SdrConfig(sample_rate=2_000_000.0, bandwidth=4_000_000.0)
         self.assertEqual(sdr.resolved_bandwidth(), 4_000_000.0)
 
     def test_zero_leaves_the_device_alone(self):
-        sdr = SdrConfig(driver="uhd", sample_rate=2_000_000.0, bandwidth=0)
+        sdr = SdrConfig(sample_rate=2_000_000.0, bandwidth=0)
         self.assertIsNone(sdr.resolved_bandwidth())
 
 
@@ -191,11 +155,9 @@ class ConfigLoadingTest(unittest.TestCase):
         return parser.parse_args(argv)
 
     def test_cli_overrides_apply_over_defaults(self):
-        args = self._parse(["--driver", "uhd", "--sample-rate", "2000000", "--no-agc", "--gain", "40"])
+        args = self._parse(["--sample-rate", "2000000", "--gain", "40"])
         config = apply_cli_overrides(BackendConfig(), args)
-        self.assertEqual(config.sdr.driver, "uhd")
         self.assertEqual(config.sdr.sample_rate, 2_000_000.0)
-        self.assertFalse(config.sdr.agc)
         self.assertEqual(config.sdr.tuner_gain, 40.0)
         # untouched fields keep defaults
         self.assertEqual(config.sdr.center_freq, 351_293_750.0)
@@ -205,76 +167,39 @@ class ConfigLoadingTest(unittest.TestCase):
         config = apply_cli_overrides(BackendConfig(), args)
         self.assertEqual(config, BackendConfig())
 
-    def test_device_string(self):
-        self.assertEqual(SdrConfig(driver="hackrf").device_string(), "driver=hackrf")
+    def test_device_string_is_device_args_verbatim(self):
+        self.assertEqual(SdrConfig().device_string(), "")
+        sdr = SdrConfig(device_args="type=b200,serial=3164424")
+        self.assertEqual(sdr.device_string(), "type=b200,serial=3164424")
 
-    def test_device_args_appended_to_device_string(self):
-        sdr = SdrConfig(driver="uhd", device_args="type=b200,serial=3164424")
-        self.assertEqual(
-            sdr.device_string(), "driver=uhd,type=b200,serial=3164424"
-        )
-
-    def test_rtlsdr_keeps_historical_stream_args(self):
-        self.assertEqual(SdrConfig().resolved_stream_args(), "bufflen=16384")
-
-    def test_other_drivers_get_no_stream_args(self):
-        # "bufflen" is rtlsdr-specific; SoapySDR aborts source construction for
-        # any driver that does not advertise it, so the default must not leak.
-        for driver in ("uhd", "hackrf", "audio"):
-            with self.subTest(driver=driver):
-                self.assertEqual(
-                    SdrConfig(driver=driver).resolved_stream_args(), ""
-                )
-
-    def test_explicit_stream_args_override_driver_default(self):
-        sdr = SdrConfig(driver="rtlsdr", stream_args="bufflen=65536")
-        self.assertEqual(sdr.resolved_stream_args(), "bufflen=65536")
-
-    def test_empty_stream_args_suppresses_driver_default(self):
-        sdr = SdrConfig(driver="rtlsdr", stream_args="")
-        self.assertEqual(sdr.resolved_stream_args(), "")
-
-    def test_antenna_defaults_to_driver_choice(self):
-        # RTL-SDR has one input; never send a port selection it cannot honour.
+    def test_antenna_defaults_to_device_choice(self):
         self.assertIsNone(SdrConfig().antenna)
 
     def test_cli_sets_freq_err_offset(self):
-        # Per-device calibration: the default is measured on an RTL-SDR and is
-        # meaningless on any other radio.
-        args = self._parse(["--driver", "uhd", "--freq-err-offset", "1030"])
+        args = self._parse(["--freq-err-offset", "1030"])
         config = apply_cli_overrides(BackendConfig(), args)
         self.assertEqual(config.sdr.resolved_freq_err_offset(), 1030.0)
 
     def test_cli_sets_bandwidth(self):
-        args = self._parse(["--driver", "uhd", "--bandwidth", "3000000"])
+        args = self._parse(["--bandwidth", "3000000"])
         config = apply_cli_overrides(BackendConfig(), args)
         self.assertEqual(config.sdr.resolved_bandwidth(), 3_000_000.0)
 
     def test_cli_sets_antenna(self):
-        args = self._parse(["--driver", "uhd", "--antenna", "TX/RX"])
+        args = self._parse(["--antenna", "TX/RX"])
         config = apply_cli_overrides(BackendConfig(), args)
         self.assertEqual(config.sdr.antenna, "TX/RX")
 
-    def test_cli_sets_device_and_stream_args(self):
-        args = self._parse(
-            ["--driver", "uhd", "--device-args", "serial=123", "--stream-args", ""]
-        )
+    def test_cli_sets_device_args(self):
+        args = self._parse(["--device-args", "serial=123"])
         config = apply_cli_overrides(BackendConfig(), args)
-        self.assertEqual(config.sdr.device_string(), "driver=uhd,serial=123")
-        self.assertEqual(config.sdr.resolved_stream_args(), "")
-
-    def test_switching_driver_via_cli_drops_rtlsdr_stream_args(self):
-        # The whole point of --driver: it must be enough on its own.
-        args = self._parse(["--driver", "uhd"])
-        config = apply_cli_overrides(BackendConfig(), args)
-        self.assertEqual(config.sdr.resolved_stream_args(), "")
+        self.assertEqual(config.sdr.device_string(), "serial=123")
 
     def test_toml_file_roundtrip(self):
         import tempfile
 
         toml_text = (
             "[sdr]\n"
-            'driver = "uhd"\n'
             "sample_rate = 4000000\n"
             "tuner_gain = 20\n"
             "\n"
@@ -286,7 +211,6 @@ class ConfigLoadingTest(unittest.TestCase):
             path.write_text(toml_text, encoding="utf-8")
             config = load_config_file(path)
 
-        self.assertEqual(config.sdr.driver, "uhd")
         self.assertEqual(config.sdr.sample_rate, 4_000_000)
         self.assertEqual(config.sdr.tuner_gain, 20)
         self.assertEqual(config.channelizer.pfb_num_channels, 64)
@@ -302,22 +226,76 @@ class ConfigLoadingTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_config_file(path)
 
+    def test_toml_rejects_removed_soapy_only_keys(self):
+        # driver / bias_tee / stream_args / freq_correction do not exist any
+        # more now the backend is UHD-only; a leftover profile from the old
+        # schema must fail loudly, not be silently ignored. (agc came back
+        # once UHD's set_rx_agc was confirmed to exist -- see AgcTest.)
+        import tempfile
+
+        for key, value in (("driver", '"uhd"'), ("bias_tee", "false"), ("stream_args", '""')):
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "cfg.toml"
+                path.write_text(f"[sdr]\n{key} = {value}\n", encoding="utf-8")
+                with self.assertRaises(ValueError):
+                    load_config_file(path)
+
     def test_load_config_file_then_cli(self):
         import tempfile
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "cfg.toml"
-            path.write_text('[sdr]\ndriver = "uhd"\nsample_rate = 4000000\n', encoding="utf-8")
+            path.write_text('[sdr]\nsample_rate = 4000000\n', encoding="utf-8")
             args = self._parse(["--config", str(path), "--sample-rate", "8000000"])
             config = load_config(args)
 
-        self.assertEqual(config.sdr.driver, "uhd")            # from file
         self.assertEqual(config.sdr.sample_rate, 8_000_000.0)  # CLI wins
 
     def test_missing_config_file_raises(self):
         args = self._parse(["--config", "/no/such/file.toml"])
         with self.assertRaises(FileNotFoundError):
             load_config(args)
+
+
+class AgcTest(unittest.TestCase):
+    def test_default_is_off(self):
+        self.assertFalse(SdrConfig().agc)
+
+    def test_toml_sets_agc(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cfg.toml"
+            path.write_text("[sdr]\nagc = true\n", encoding="utf-8")
+            config = load_config_file(path)
+        self.assertTrue(config.sdr.agc)
+
+    def test_cli_sets_agc(self):
+        import argparse
+
+        parser = argparse.ArgumentParser()
+        add_config_arguments(parser)
+        args = parser.parse_args(["--agc"])
+        config = apply_cli_overrides(BackendConfig(), args)
+        self.assertTrue(config.sdr.agc)
+
+    def test_cli_no_agc_overrides_file(self):
+        import argparse
+
+        parser = argparse.ArgumentParser()
+        add_config_arguments(parser)
+        args = parser.parse_args(["--no-agc"])
+        config = apply_cli_overrides(BackendConfig(sdr=SdrConfig(agc=True)), args)
+        self.assertFalse(config.sdr.agc)
+
+    def test_absent_cli_flag_does_not_override(self):
+        import argparse
+
+        parser = argparse.ArgumentParser()
+        add_config_arguments(parser)
+        args = parser.parse_args([])
+        config = apply_cli_overrides(BackendConfig(sdr=SdrConfig(agc=True)), args)
+        self.assertTrue(config.sdr.agc)
 
 
 def replace_sample_rate(rate):

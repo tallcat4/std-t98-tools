@@ -36,7 +36,7 @@ from ipc.transport.uds_seqpacket import (
 )
 
 
-BACKEND_IMPORT_CHECKS = ("from gnuradio import gr", "from gnuradio import soapy")
+BACKEND_IMPORT_CHECKS = ("from gnuradio import gr", "from gnuradio import uhd")
 SERVICE_IMPORT_CHECKS = (
     "import pyambelib",
     "import sounddevice",
@@ -311,6 +311,32 @@ def _apply_service_payload(process_views_by_name, source, payload_dict):
     return True
 
 
+def _apply_health_payload(process_views_by_name, source, payload_dict):
+    if payload_dict.get("event") != "health":
+        return False
+
+    process_name = SOURCE_PROCESS_NAMES.get(source)
+    if process_name is None:
+        return False
+
+    process_view = process_views_by_name.get(process_name)
+    if process_view is None:
+        return False
+
+    changed = False
+    ok = payload_dict.get("ok")
+    if process_view.health_ok != ok:
+        process_view.health_ok = ok
+        changed = True
+
+    summary = payload_dict.get("summary", "")
+    if process_view.health != summary:
+        process_view.health = summary
+        changed = True
+
+    return changed
+
+
 class StatusAggregator:
     """Owns the shared channel / process state and folds status packets into it.
 
@@ -331,6 +357,7 @@ class StatusAggregator:
     def apply_packet(self, packet) -> bool:
         payload_dict = packet.to_dict()
         changed = _apply_service_payload(self._process_views_by_name, packet.source, payload_dict)
+        changed = _apply_health_payload(self._process_views_by_name, packet.source, payload_dict) or changed
         changed = _apply_status_payload(self.channels, packet.source, packet.channel_id, payload_dict) or changed
         return changed
 

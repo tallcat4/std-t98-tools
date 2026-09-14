@@ -9,7 +9,7 @@ pytest.importorskip("PyQt5.QtWidgets")
 
 from PyQt5 import QtCore, QtWidgets  # noqa: E402
 
-from app.main_window import MainWindow, ProcessBadge  # noqa: E402
+from app.main_window import MainWindow, ProcessBadge, _PROCESS_STATE_COLOURS  # noqa: E402
 from core.pipeline.multi_stack_dashboard import ChannelView, ProcessView  # noqa: E402
 
 
@@ -29,48 +29,106 @@ def test_channel_grid_has_fixed_thirty_cards(qapp):
     assert window._cards[29]._title.text() == "CH 30"
 
 
-def test_none_profile_disables_calibration(qapp, tmp_path, monkeypatch):
+def test_sdr_form_starts_empty_with_no_settings_file(qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     window = MainWindow()
-    window._reload_profiles(select_path=None)
-    assert window._current_profile_path() is None
-    assert not window._freq_err.isEnabled()
-
-
-def test_calibration_writes_into_profile_file(qapp, tmp_path, monkeypatch):
-    from app.profile_store import create_profile, read_freq_err_offset
-
-    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    template = tmp_path / "tmpl.toml"
-    template.write_text('# USRP B210\n[sdr]\ndriver = "uhd"\nsample_rate = 2000000\n')
-    profile = create_profile(template, "unit1")  # -> $XDG/std-t98/profiles/unit1.toml
-
-    window = MainWindow()
-    window._reload_profiles(select_path=str(profile))
-    assert window._current_profile_path() == str(profile)
-    assert window._freq_err.isEnabled()
-
-    window._freq_err.setText("1030")
-    window._save_calibration_to_profile()
-    assert read_freq_err_offset(profile) == 1030
-
-    # Re-selecting the profile mirrors the file's value back into the field.
-    window._reload_profiles(select_path=None)
+    assert window._antenna_field.currentText() == ""
+    assert window._sample_rate_field.text() == ""
     assert window._freq_err.text() == ""
-    window._reload_profiles(select_path=str(profile))
+    # A settings file is always created so the backend has something to load.
+    from app.settings_store import settings_path
+
+    assert settings_path().exists()
+
+
+def test_sdr_form_seeds_from_existing_settings_file(qapp, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    from app.settings_store import settings_path
+
+    settings_path().parent.mkdir(parents=True, exist_ok=True)
+    settings_path().write_text(
+        '# USRP B210\n[sdr]\nantenna = "TX/RX"\nsample_rate = 2000000\n'
+        'tuner_gain = 30\ngain_element = "PGA"\nfreq_err_offset = 1030\n'
+    )
+
+    window = MainWindow()
+    assert window._antenna_field.currentText() == "TX/RX"
+    assert window._sample_rate_field.text() == "2000000"
+    assert window._gain_field.text() == "30"
+    assert window._gain_element_field.text() == "PGA"
     assert window._freq_err.text() == "1030"
 
 
-def test_external_profile_is_listed_and_selected(qapp, tmp_path, monkeypatch):
+def test_editing_a_field_writes_into_the_settings_file(qapp, tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    external = tmp_path / "my-b210.toml"
-    external.write_text('[sdr]\ndriver = "uhd"\n')
+    from app.settings_store import read_sdr_value
 
     window = MainWindow()
-    window._reload_profiles(select_path=str(external))
-    assert window._current_profile_path() == str(external)
-    labels = [window._profile_combo.itemText(i) for i in range(window._profile_combo.count())]
-    assert any("external" in label for label in labels)
+    window._freq_err.setText("1030")
+    assert read_sdr_value("freq_err_offset") == 1030
+
+    window._antenna_field.setCurrentText("RX2")
+    assert read_sdr_value("antenna") == "RX2"
+
+
+def test_invalid_numeric_field_is_not_written_and_warns(qapp, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    from app.settings_store import read_sdr_value
+
+    window = MainWindow()
+    window._sample_rate_field.setText("not-a-number")
+    assert read_sdr_value("sample_rate") is None
+    assert "invalid number" in window._preview_note.text()
+
+
+def test_sdr_fields_disabled_while_running(qapp, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    window = MainWindow()
+    assert window._antenna_field.isEnabled()
+    assert window._detect_button.isEnabled()
+
+    window._set_running(True)
+    assert not window._antenna_field.isEnabled()
+    assert not window._sample_rate_field.isEnabled()
+    assert not window._detect_button.isEnabled()
+
+
+def test_agc_checkbox_seeds_from_settings_and_writes_through(qapp, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    from app.settings_store import read_sdr_value
+
+    window = MainWindow()
+    assert window._agc_field.isChecked() is False
+    assert window._gain_field.isEnabled()
+
+    window._agc_field.setChecked(True)
+    assert read_sdr_value("agc") is True
+    # While AGC is on, the device ignores manual gain -- grey it out.
+    assert not window._gain_field.isEnabled()
+
+    window._agc_field.setChecked(False)
+    assert read_sdr_value("agc") is False
+    assert window._gain_field.isEnabled()
+
+
+def test_agc_checkbox_seeds_true_from_existing_settings_file(qapp, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    from app.settings_store import settings_path
+
+    settings_path().parent.mkdir(parents=True, exist_ok=True)
+    settings_path().write_text("[sdr]\nagc = true\n")
+
+    window = MainWindow()
+    assert window._agc_field.isChecked() is True
+    assert not window._gain_field.isEnabled()
+
+
+def test_agc_checkbox_disabled_while_running(qapp, tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    window = MainWindow()
+    window._set_running(True)
+    assert not window._agc_field.isEnabled()
+    assert not window._gain_field.isEnabled()
 
 
 def test_settings_panel_toggles(qapp):
@@ -98,53 +156,68 @@ def test_process_badge_shows_metrics_once_reported(qapp):
     assert badge._detail.isVisibleTo(badge)
 
 
-def test_squelch_slider_seeds_from_profile_and_defaults_without_one(qapp, tmp_path, monkeypatch):
+def test_process_badge_shows_healthy_status(qapp):
+    badge = ProcessBadge("backend")
+    view = ProcessView(name="backend", python_executable="/x", script_name="backend.py", state="RUNNING")
+    view.health_ok = True
+    view.health = "OK"
+    badge.update_from(view)
+    assert badge._health.text() == "✓ OK"
+    assert badge._health.isVisibleTo(badge)
+    # A healthy, RUNNING process keeps the plain RUNNING (green) look.
+    assert "#2e7d32" in badge._state.styleSheet()
+
+
+def test_process_badge_flags_degraded_backend_while_running(qapp):
+    badge = ProcessBadge("backend")
+    view = ProcessView(name="backend", python_executable="/x", script_name="backend.py", state="RUNNING")
+    view.health_ok = False
+    view.health = "drift: antenna"
+    badge.update_from(view)
+    assert badge._health.text() == "⚠ drift: antenna"
+    assert badge._health.isVisibleTo(badge)
+    # Alive is not the same as healthy: reuse the STARTING amber, not green.
+    assert badge._state.styleSheet() == f"color: {_PROCESS_STATE_COLOURS['STARTING']}; font-weight: 700;"
+
+
+def test_process_badge_hides_health_line_when_none_reported(qapp):
+    badge = ProcessBadge("backend")
+    view = ProcessView(name="backend", python_executable="/x", script_name="backend.py", state="RUNNING")
+    badge.update_from(view)
+    assert not badge._health.isVisibleTo(badge)
+
+
+def test_squelch_slider_seeds_from_settings_and_defaults_without_one(qapp, tmp_path, monkeypatch):
     from app.main_window import DEFAULT_SQUELCH_THRESHOLD
-    from app.profile_store import create_profile
 
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    template = tmp_path / "tmpl.toml"
-    template.write_text('[sdr]\ndriver = "uhd"\n[demod]\nsquelch_threshold = -60\n')
-    profile = create_profile(template, "unit1")
-
     window = MainWindow()
-    window._reload_profiles(select_path=None)
     assert window._squelch_slider.value() == int(round(DEFAULT_SQUELCH_THRESHOLD))
 
-    window._reload_profiles(select_path=str(profile))
-    assert window._squelch_slider.value() == -60
-    assert window._squelch_value_label.text() == "-60 dB"
+    from app.settings_store import settings_path
+
+    settings_path().parent.mkdir(parents=True, exist_ok=True)
+    settings_path().write_text('[demod]\nsquelch_threshold = -60\n')
+    window2 = MainWindow()
+    assert window2._squelch_slider.value() == -60
+    assert window2._squelch_value_label.text() == "-60 dB"
 
 
-def test_squelch_save_button_writes_into_profile_and_needs_a_profile(qapp, tmp_path, monkeypatch):
-    from app.profile_store import create_profile, read_squelch_threshold
+def test_squelch_save_button_writes_into_settings_file(qapp, tmp_path, monkeypatch):
+    from app.settings_store import read_demod_value
 
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    template = tmp_path / "tmpl.toml"
-    template.write_text('[sdr]\ndriver = "uhd"\n[demod]\nsquelch_threshold = -60\n')
-    profile = create_profile(template, "unit1")
-
     window = MainWindow()
-    window._reload_profiles(select_path=None)
-    assert not window._squelch_save_button.isEnabled()
-
-    window._reload_profiles(select_path=str(profile))
     assert window._squelch_save_button.isEnabled()
     window._squelch_slider.setValue(-35)
-    window._save_squelch_to_profile()
-    assert read_squelch_threshold(profile) == -35
+    window._save_squelch_to_settings()
+    assert read_demod_value("squelch_threshold") == -35
 
 
 def test_squelch_controls_disabled_in_services_only_mode(qapp, tmp_path, monkeypatch):
-    from app.profile_store import create_profile
-
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    template = tmp_path / "tmpl.toml"
-    template.write_text('[sdr]\ndriver = "uhd"\n')
-    profile = create_profile(template, "unit1")
 
     window = MainWindow()
-    window._reload_profiles(select_path=str(profile))
     assert window._squelch_slider.isEnabled()
 
     window._services_only.setChecked(True)

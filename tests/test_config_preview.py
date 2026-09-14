@@ -1,8 +1,7 @@
 from textwrap import dedent
 
 from app.config_preview import (
-    list_device_presets,
-    parse_soapy_find,
+    parse_uhd_find,
     preview_config,
 )
 
@@ -28,10 +27,8 @@ def test_preview_missing_file_is_error():
 def test_preview_resolves_uhd_config(tmp_path):
     path = _write(tmp_path, """
         [sdr]
-        driver = "uhd"
         sample_rate = 2000000
         antenna = "TX/RX"
-        agc = false
         tuner_gain = 30
         gain_element = "PGA"
         freq_err_offset = 1030
@@ -40,77 +37,82 @@ def test_preview_resolves_uhd_config(tmp_path):
     """)
     result = preview_config(str(path))
     assert result.ok is True
-    assert "driver=uhd" in result.summary
     assert "TX/RX" in result.summary
+    assert "PGA" in result.summary
     assert "+1030 Hz" in result.summary
     assert "2,000,000 Hz" in result.summary
     assert result.warnings == []
 
 
-def test_preview_applies_freq_err_override(tmp_path):
+def test_preview_offset_reflected_in_tuned_freq(tmp_path):
     path = _write(tmp_path, """
         [sdr]
-        driver = "uhd"
         center_freq = 351293750
     """)
     base = preview_config(str(path))
-    over = preview_config(str(path), freq_err_offset_override=1030)
     assert "+0 Hz" in base.summary
+
+    path.write_text('[sdr]\ncenter_freq = 351293750\nfreq_err_offset = 1030\n')
+    over = preview_config(str(path))
     assert "+1030 Hz" in over.summary
-    assert "saved calibration" in over.summary
 
 
-def test_preview_override_on_builtin_defaults():
-    result = preview_config("", freq_err_offset_override=-340)
-    assert result.ok is True
-    assert "-340 Hz" in result.summary
-
-
-def test_list_device_presets_reads_comment_header(tmp_path):
-    (tmp_path / "b.toml").write_text(dedent("""
-        # USRP B210
-        # Ettus/LibreSDR B210 over uhd.
-        [sdr]
-        driver = "uhd"
-    """))
-    (tmp_path / "a.toml").write_text('[sdr]\ndriver = "rtlsdr"\n')
-
-    presets = list_device_presets(tmp_path)
-    # sorted by filename: a.toml (no header -> stem), b.toml (header)
-    assert [p.path.name for p in presets] == ["a.toml", "b.toml"]
-    assert presets[0].name == "a"
-    assert presets[1].name == "USRP B210"
-    assert presets[1].description == "Ettus/LibreSDR B210 over uhd."
-
-
-def test_list_device_presets_missing_dir_is_empty(tmp_path):
-    assert list_device_presets(tmp_path / "nope") == []
-
-
-def test_shipped_presets_load(tmp_path):
-    # The repo's presets must be valid, loadable backend configs.
+def test_shipped_devices_reference_config_loads():
+    # devices/usrp-b210.toml is no longer used by the GUI (it always edits a
+    # single fixed settings file, see app.settings_store), but it remains a
+    # valid --config reference for CLI users, so it must stay loadable.
     from pathlib import Path
 
-    devices = Path(__file__).resolve().parent.parent / "devices"
-    presets = list_device_presets(devices)
-    assert {p.path.name for p in presets} >= {"usrp-b210.toml", "rtl-sdr.toml"}
-    for preset in presets:
-        assert preview_config(str(preset.path)).ok is True
+    path = Path(__file__).resolve().parent.parent / "devices" / "usrp-b210.toml"
+    assert preview_config(str(path)).ok is True
 
 
-def test_parse_soapy_find_extracts_devices():
+def test_parse_uhd_find_extracts_devices():
     output = """
-    Found device 0
-      driver = audio
-      label = Built-in Audio
-
-    Found device 1
-      driver = uhd
-      label = B210 5IWG5D5
-      serial = 5IWG5D5
-      type = b200
+    --------------------------------------------------
+    -- UHD Device 0
+    --------------------------------------------------
+    Device Address:
+        serial: 5IWG5D5
+        name: LibreSDR_B220mini
+        product: B210
+        type: b200
     """
-    devices = parse_soapy_find(output)
-    assert [d.driver for d in devices] == ["audio", "uhd"]
-    assert devices[1].serial == "5IWG5D5"
-    assert devices[1].extra["type"] == "b200"
+    devices = parse_uhd_find(output)
+    assert len(devices) == 1
+    assert devices[0].device_type == "b200"
+    assert devices[0].serial == "5IWG5D5"
+    assert devices[0].label == "LibreSDR_B220mini"
+    assert devices[0].extra["product"] == "B210"
+
+
+def test_parse_uhd_find_extracts_multiple_devices():
+    output = """
+    Device Address:
+        serial: AAA111
+        type: b200
+
+    Device Address:
+        serial: BBB222
+        type: x300
+    """
+    devices = parse_uhd_find(output)
+    assert [d.serial for d in devices] == ["AAA111", "BBB222"]
+    assert [d.device_type for d in devices] == ["b200", "x300"]
+
+
+def test_parse_uhd_find_empty_output_is_no_devices():
+    assert parse_uhd_find("") == []
+
+
+def test_preview_shows_agc_instead_of_gain_when_enabled(tmp_path):
+    path = _write(tmp_path, """
+        [sdr]
+        agc = true
+        tuner_gain = 30
+        gain_element = "PGA"
+    """)
+    result = preview_config(str(path))
+    assert result.ok is True
+    assert "Gain        : AGC" in result.summary
+    assert "PGA" not in result.summary

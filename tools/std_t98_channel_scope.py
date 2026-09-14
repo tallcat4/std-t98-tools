@@ -19,8 +19,8 @@ Four views, left to right through the chain:
 The DSP is lifted from std_t98_30ch_multi_rf_backend so what is on screen is
 what the backend sees; only the sinks differ.
 
-    python3 tools/std_t98_channel_scope.py --driver uhd --antenna TX/RX \\
-        --gain 10 --channel 1
+    python3 tools/std_t98_channel_scope.py --antenna TX/RX \\
+        --gain 30 --channel 1
 """
 
 import math
@@ -42,7 +42,7 @@ from core.rf.backend_config import (
     derive_rates,
     load_config,
 )
-from core.rf.soapy_source import open_source
+from core.rf.uhd_source import open_source
 from firdes import make_rx_taps
 
 
@@ -97,8 +97,8 @@ class ChannelScope(gr.top_block, Qt.QWidget):
                 gr.sizeof_gr_complex, rates.samp_rate_post_resamp1, True, 0)
         else:
             # Same helper the backend uses, so the device is configured
-            # identically -- rate validation and snapping, driver-aware stream
-            # args and bandwidth, antenna checking, and the gain fallbacks.
+            # identically -- rate validation and snapping, bandwidth,
+            # antenna checking, and the gain-element fallback.
             self._source = open_source(sdr_cfg)
             self.source = self._source.source
             self.rotator = blocks.rotator_cc(0.0)

@@ -5,22 +5,19 @@
 # or point the STD_T98_BACKEND_CONFIG environment variable at it.
 # Any value can also be overridden on the command line (CLI wins over the file).
 #
-# All values below are the built-in defaults, which reproduce the historical
-# RTL-SDR / 1.2 MHz behaviour exactly. Only the keys you change need to be
-# present; omitted keys fall back to these defaults.
+# The backend targets USRP hardware through UHD only. All values below are the
+# built-in defaults. Only the keys you change need to be present; omitted keys
+# fall back to these defaults.
 
 [sdr]
-# SoapySDR driver key. Examples: "rtlsdr", "uhd" (USRP), "hackrf", "airspy".
-driver = "rtlsdr"
-
-# Extra SoapySDR device selection, appended to the device string as
-# "driver=<driver>,<device_args>". Use it to pick one of several identical
-# SDRs ("serial=00000001") or to tell a driver what it is talking to
-# ("type=b200"). Run `SoapySDRUtil --find` to see what is connected.
+# UHD device address, appended to the device string as-is. Use it to pick one
+# of several connected USRPs ("serial=00000001") or to tell UHD what it is
+# talking to ("type=b200"). Leave empty to auto-select when only one USRP is
+# connected. Run `uhd_find_devices` to see what is connected.
 device_args = ""
 
 # Input sample rate in Hz. The channelizer rates are derived from this, so any
-# rate that keeps a 6.25 kHz PFB bin achievable will work (e.g. USRP 2_000_000).
+# rate that keeps a 6.25 kHz PFB bin achievable will work (e.g. 2_000_000).
 sample_rate = 1_200_000
 
 # Center (tuned) frequency in Hz. STD-T98 band center: 351.29375 MHz.
@@ -29,53 +26,38 @@ center_freq = 351_293_750
 # Deliberate tuning offset (Hz), applied on top of center_freq.
 freq_offset = 0
 
-# Per-device frequency error correction (Hz). Commented out on purpose: this is
-# calibration for one physical radio, not a property of the driver, so it is
-# applied only to the device it was measured on (rtlsdr: -340) and every other
-# device starts from 0. Applying a foreign device's value is actively harmful --
-# the demodulator turns a frequency error into a DC level on the symbol stream,
-# and -340 Hz alone is enough DC to push the sync detector past its threshold.
-# Measure it for your own radio and set it here, or 0 to disable it explicitly.
-#freq_err_offset = -340
+# Per-device frequency error correction (Hz). Commented out on purpose: this
+# is calibration for one physical radio, not a property of the hardware model,
+# so a value measured on one unit is meaningless -- actively harmful -- on
+# another. The demodulator turns a frequency error into a DC level on the
+# symbol stream, and a few hundred Hz of DC alone is enough to push the sync
+# detector past its threshold. Measure it for your own radio and set it here,
+# or 0 to disable it explicitly.
+#freq_err_offset = 1030
 
-# Frequency correction in ppm (SoapySDR set_frequency_correction). Ignored on
-# devices that do not support it.
-freq_correction = 0
-
-# Manual tuner gain, used when agc = false.
+# Manual RX gain in dB. Ignored while agc = true.
 tuner_gain = 30
 
-# Hardware AGC. Devices without an AGC mode ignore this.
-agc = true
+# UHD named gain stage to drive. Leave empty ("") to set the device's overall
+# gain. On a USRP B210 the element is named "PGA" (0-76 dB).
+gain_element = ""
 
-# Bias tee power. Only applied on devices exposing a "biastee" setting.
-bias_tee = false
+# Hardware AGC (uhd.usrp_source.set_rx_agc). Not every daughterboard supports
+# it; unsupported boards are left alone rather than erroring.
+agc = false
 
-# SoapySDR gain element name to drive in manual mode. "TUNER" suits RTL-SDR;
-# leave empty ("") to set the device's overall gain. On a USRP B210 the element
-# is named "PGA" (0-76 dB); "" works there too.
-gain_element = "TUNER"
-
-# RX antenna port. Commented out on purpose: when unset, the driver's own
-# default is kept, which is correct for single-input devices like RTL-SDR.
-# Devices with several RX ports need this -- a USRP B210 offers "TX/RX" and
-# "RX2" and defaults to RX2. Starting the backend with a name the device does
-# not have fails immediately and lists the valid ones.
+# RX antenna port. Commented out on purpose: when unset, the device's own
+# default is kept, which is correct for boards with a single RX input. Boards
+# with several RX ports need this -- a USRP B210 offers "TX/RX" and "RX2" and
+# defaults to RX2. Starting the backend with a name the device does not have
+# fails immediately and lists the valid ones.
 #antenna = "RX2"
 
-# Analog front-end bandwidth in Hz. Commented out on purpose: when unset, every
-# driver except RTL-SDR (which tracks its own filter to the sample rate) gets
-# the bandwidth set to sample_rate. Without that a USRP B210 stays at its full
-# 56 MHz and folds megahertz of spectrum onto the 187.5 kHz that matters. Set a
-# value to override, or 0 to leave the device's own setting alone.
+# Analog front-end bandwidth in Hz. Commented out on purpose: when unset, it
+# follows sample_rate. Without that a USRP B210 stays at its full 56 MHz and
+# folds megahertz of spectrum onto the 187.5 kHz that matters. Set a value to
+# override, or 0 to leave the device's own setting alone.
 #bandwidth = 2_000_000
-
-# Extra SoapySDR stream arguments. Commented out on purpose: when unset, each
-# driver gets its own default ("bufflen=16384" for rtlsdr, none for everything
-# else). SoapySDR rejects stream args a device does not advertise and refuses
-# to open, so "bufflen" must not be sent to e.g. uhd or hackrf. Set this only
-# to tune a driver you know accepts the argument, or to "" to send none.
-#stream_args = "bufflen=16384"
 
 [channelizer]
 # 6.25 kHz STD-T98 channel raster. This is a protocol constant; changing it
@@ -95,9 +77,10 @@ resamp2_interp = 10
 [demod]
 # Per-channel squelch threshold in dB. This is an ABSOLUTE level, so it depends
 # on the SDR's gain and scaling: the same signal sits at different dB on
-# different radios. Too high and every channel is silently muted. The default
-# suits RTL-SDR; measure with tools/std_t98_analyse_capture.py on other devices
-# and set a value comfortably below the reported channel power.
+# different radios/gain settings. Too high and every channel is silently
+# muted. Measure with tools/std_t98_analyse_capture.py (or the desktop GUI's
+# live squelch slider) and set a value comfortably below the reported channel
+# power.
 squelch_threshold = -25.0
 
 # Squelch power-averaging coefficient (1.0 = no averaging).
