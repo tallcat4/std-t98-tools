@@ -5,6 +5,7 @@ from core.pipeline.stack_supervisor import StackSupervisor, StatusAggregator
 from core.pipeline.multi_stack_dashboard import ProcessView
 from ipc.message_schema import (
     ControlSquelchPacket,
+    ControlSyncThresholdPacket,
     STATUS_SOURCE_AUDIO,
     STATUS_SOURCE_PROTOCOL,
     STATUS_SOURCE_RF,
@@ -178,6 +179,26 @@ def test_set_squelch_sends_encoded_packet_to_control_server():
 
     assert sup.set_squelch(-42.5) is True
     assert sent == [ControlSquelchPacket(threshold_db=-42.5).encode()]
+
+
+def test_set_sync_threshold_ratio_without_control_server_returns_false():
+    sup = StackSupervisor(repo_root=Path("/tmp/std-t98-tools"))
+    assert sup.set_sync_threshold_ratio(0.3) is False
+
+
+def test_set_sync_threshold_ratio_sends_encoded_packet_to_control_server():
+    sent = []
+
+    class FakeControlServer:
+        def send(self, payload):
+            sent.append(payload)
+            return True
+
+    sup = StackSupervisor(repo_root=Path("/tmp/std-t98-tools"))
+    sup._control_server = FakeControlServer()
+
+    assert sup.set_sync_threshold_ratio(0.3) is True
+    assert sent == [ControlSyncThresholdPacket(ratio=0.3).encode()]
 
 
 def test_health_payload_folds_into_process_view():

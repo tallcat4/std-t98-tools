@@ -3,6 +3,8 @@ import numpy as np
 
 from ipc.message_schema import (
     ControlSquelchPacket,
+    ControlSyncThresholdPacket,
+    decode_control_packet,
     FRAME_FLAG_SYNC_DETECTED,
     FramePacket,
     SECRET_BURST_BYTES_AMBE_2450,
@@ -31,6 +33,37 @@ def test_control_squelch_packet_rejects_wrong_type():
     # size mismatch is what actually gets hit -- also worth asserting on.
     with pytest.raises(ValueError):
         ControlSquelchPacket.decode(b"\x00" * 4)
+
+
+def test_control_sync_threshold_packet_roundtrip():
+    packet = ControlSyncThresholdPacket(ratio=0.35)
+
+    decoded = ControlSyncThresholdPacket.decode(packet.encode())
+
+    assert decoded.ratio == pytest.approx(0.35)
+
+
+def test_control_packets_do_not_decode_as_each_other():
+    # Same wire size, so only the message type tells them apart.
+    with pytest.raises(ValueError):
+        ControlSquelchPacket.decode(ControlSyncThresholdPacket(ratio=0.2).encode())
+    with pytest.raises(ValueError):
+        ControlSyncThresholdPacket.decode(ControlSquelchPacket(threshold_db=-40).encode())
+
+
+def test_decode_control_packet_dispatches_on_message_type():
+    squelch = decode_control_packet(ControlSquelchPacket(threshold_db=-42.5).encode())
+    assert isinstance(squelch, ControlSquelchPacket)
+    assert squelch.threshold_db == pytest.approx(-42.5)
+
+    sync = decode_control_packet(ControlSyncThresholdPacket(ratio=0.35).encode())
+    assert isinstance(sync, ControlSyncThresholdPacket)
+    assert sync.ratio == pytest.approx(0.35)
+
+    with pytest.raises(ValueError):
+        decode_control_packet(b"\x01\x00\x63\x00\x00\x00\x00\x00")  # unknown type 99
+    with pytest.raises(ValueError):
+        decode_control_packet(b"\x01")  # shorter than the prefix
 
 
 def test_frame_packet_roundtrip():

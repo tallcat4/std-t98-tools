@@ -164,6 +164,8 @@ PyQt5 が必要です（GNU Radio の Qt GUI に含まれるため、RF 環境�
 
 設定パネルの外、常時表示のコントロール行には **Squelch** スライダーがあります。スケルチ (`[demod].squelch_threshold`) は SDR のゲイン設定によって適正値が変わり、外れていると音もエラーも無いまま全チャンネルが無音化する値なので（→ [新しい機種で注意する項目](#新しい機種で注意する項目)）、録音の再生や再起動を挟まずに **受信中でも動かして即座に効果を確認**できるようにしてあります。Start 時点のスライダー値がそのまま backend に `--squelch` として渡され、動作中の変更は制御ソケット経由でフローグラフへライブ反映されます。良い値が見つかったら **Save** で設定ファイルの `[demod].squelch_threshold` に書き込めます。
 
+その下の **Sync thr** スライダーは、同期語検出のエネルギー閾値 (`[demod].sync_error_threshold_ratio`) です。同期語（10 シンボル）自身のエネルギーに対する比率で、受信シンボル列の二乗誤差がこれ以下なら同期とみなします。小さいほど厳しく（誤同期は減るが、ノイズや DC オフセットのある信号は同期しない）、大きいほど緩くなります。既定は 0.2。スケルチと同じく Start 時に `--sync-threshold-ratio` として渡され、受信中の変更は制御ソケット経由でライブ反映、**Save** で設定ファイルに書き込めます。**Debug metrics** を有効にすると各チャンネルに `thr=`（この比率から求めた絶対閾値）と `best=`（これまで最も閾値に近づいた二乗誤差）が表示されるので、`best` が `thr` のすぐ上に張り付いているなら少し緩める、という判断ができます。
+
 プロセス一覧の各行には、生死だけでなく **Health** も表示されます。backend 行は「プロセスが生きている」と「実際に UHD デバイスからストリーミングできている」を区別します（起動直後は STARTING のまま留まり、フローグラフが最初のサンプルを処理して初めて RUNNING に上がります — B210 の FPGA ロードや USB 再列挙に時間がかかっても、それを「動いているのに応答なし」と誤認しません）。RUNNING 後も数秒おきに実機へ再問い合わせし（サンプルレート・周波数・アンテナの設定ドリフト、LO ロック、温度・RSSI などのセンサー、UHD が報告するストリーム途切れ）、異常を検知すると RUNNING のままアンバー表示に切り替わります。
 
 #### デスクトップに登録
@@ -199,7 +201,7 @@ backend は UHD 経由で USRP を直接駆動します。設定の優先順位�
 python3 std_t98_30ch_multi_rf_backend.py --config myradio.toml --dry-run
 ```
 
-主な CLI 引数: `--device-args` / `--sample-rate` / `--freq` / `--gain` / `--gain-element` / `--agc` / `--no-agc` / `--antenna` / `--bandwidth` / `--freq-err-offset` / `--squelch` / `--config` / `--dry-run`。
+主な CLI 引数: `--device-args` / `--sample-rate` / `--freq` / `--gain` / `--gain-element` / `--agc` / `--no-agc` / `--antenna` / `--bandwidth` / `--freq-err-offset` / `--squelch` / `--sync-threshold-ratio` / `--config` / `--dry-run`。
 
 ### 新しい機種で注意する項目
 
@@ -209,6 +211,7 @@ B210 以外の USRP を使う際、機種によって調整が要る主な項目
 - **サンプルレート (`--sample-rate`)**: 対応レートはマスタークロックの分周比で決まるため機種ごとに離散的です。要求値は自動的に対応レートへスナップされます。
 - **周波数誤差 (`--freq-err-offset`)**: 個体ごとの実測校正値で、機種をまたいで流用できません。ずれていると同期語を検出できません。許容は約 ±333 Hz。→ [周波数校正](#周波数校正)
 - **スケルチ (`--squelch`)**: 絶対レベル（dB）のため、SDR のゲイン・スケーリングに依存します。高すぎると全チャンネルが無音化されます。ゲインより閾値側に余裕を持たせるのが確実です。デスクトップ GUI ならスケルチスライダーで受信中に調整できます。
+- **同期語閾値 (`--sync-threshold-ratio`)**: 同期語エネルギーに対する二乗誤差の許容比率（既定 0.2）。周波数誤差やノイズで `best=` が `thr=` に届かない場合に緩めると同期が取れることがありますが、緩めすぎると誤同期が増えます。デスクトップ GUI の Sync thr スライダーで受信中に調整できます。
 - **アナログ帯域幅 (`--bandwidth`)**: 未指定ならサンプルレートに追従させます。設定しないと（あるいは追従させないと）折り返し混入の原因になります。
 - **デバイス選択 (`--device-args`)**: 同型機が複数ある場合などに `serial=...` や `type=b200` を渡します。
 
@@ -288,7 +291,8 @@ python3 std_t98_multi_service_launcher.py \
 4. **アンテナ端子と `--antenna` が一致しているか**（不一致だと無警告で受信ゼロ）— デスクトップ GUI や `--show-debug-metrics` の Health 表示でも `antenna_ok` としてライブに検知されます
 5. Health 表示（GUI のプロセス行 / 端末の `--show-debug-metrics`）が `drift:` を報告していないか（サンプルレート・周波数・LO ロックのずれ、ストリーム途切れ）
 6. スケルチが高すぎないか（`--no-squelch` で切り分け、または GUI のスケルチスライダーで受信中に調整）
-7. それでも `sync=0` なら、単にその時間帯に送信が無い可能性
+7. 同期語閾値が厳しすぎないか（Debug metrics の `best=` が `thr=` にわずかに届かないなら、GUI の Sync thr スライダーか `--sync-threshold-ratio` で少し緩める）
+8. それでも `sync=0` なら、単にその時間帯に送信が無い可能性
 
 ### 音声の不具合
 
@@ -328,7 +332,7 @@ launcher（端末）と GUI は、プロセスの起動・停止・状態集約�
 | status | `std_t98_multi_status.sock` |
 | secret request | `std_t98_multi_secret_request.sock` |
 | secret result | `std_t98_multi_secret_result.sock` |
-| control（GUI→backend、ライブスケルチ変更） | `std_t98_multi_control.sock` |
+| control（GUI→backend、スケルチ / 同期語閾値のライブ変更） | `std_t98_multi_control.sock` |
 
 置き場所は `STD_T98_RUNTIME_DIR` でまとめて、個別パスは `STD_T98_MULTI_FRAME_SOCKET` などで上書きできます（個別指定が優先）。backend と service を別々に起動する場合は、双方の `XDG_RUNTIME_DIR` が一致していることを確認してください（systemd unit や `sudo` 経由では未設定になり `/tmp` 側にずれます）。launcher 経由なら環境変数が継承されるため揃います。
 

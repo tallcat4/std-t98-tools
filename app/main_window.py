@@ -36,6 +36,11 @@ CHANNEL_COUNT = 30
 POLL_INTERVAL_MS = 100
 SQUELCH_RANGE_DB = (-100, 0)
 DEFAULT_SQUELCH_THRESHOLD = DemodConfig().squelch_threshold
+# The sync-word threshold is a ratio (fraction of the sync word's energy), but
+# QSlider is integer-only, so the slider holds hundredths: 1..100 <-> 0.01..1.00.
+SYNC_THRESHOLD_SLIDER_SCALE = 100
+SYNC_THRESHOLD_RANGE = (1, SYNC_THRESHOLD_SLIDER_SCALE)
+DEFAULT_SYNC_THRESHOLD_RATIO = DemodConfig().sync_error_threshold_ratio
 _SDR_NUMERIC_FIELDS = {"sample_rate", "tuner_gain", "bandwidth", "freq_err_offset"}
 
 
@@ -47,6 +52,19 @@ def _format_field_value(value):
     if isinstance(value, float) and value.is_integer():
         return str(int(value))
     return str(value)
+
+
+def _sync_ratio_to_slider(ratio):
+    lo, hi = SYNC_THRESHOLD_RANGE
+    return min(hi, max(lo, int(round(float(ratio) * SYNC_THRESHOLD_SLIDER_SCALE))))
+
+
+def _sync_slider_to_ratio(position):
+    return position / SYNC_THRESHOLD_SLIDER_SCALE
+
+
+def _format_sync_ratio(ratio):
+    return f"{ratio:.2f}"
 
 _PROCESS_STATE_COLOURS = {
     "RUNNING": "#2e7d32",
@@ -300,6 +318,37 @@ class MainWindow(QtWidgets.QMainWindow):
         squelch_row.addWidget(self._squelch_save_button)
         root.addLayout(squelch_row)
 
+        # Sync-word threshold row: same shape as the squelch row, for the
+        # other knob that decides whether anything decodes at all. The value
+        # is a fraction of the sync word's energy (lower = stricter), so it is
+        # shown as a ratio; the Debug metrics "thr=" figure is the resulting
+        # absolute threshold the backend actually compares against.
+        sync_row = QtWidgets.QHBoxLayout()
+        sync_label = QtWidgets.QLabel("Sync thr:")
+        sync_label.setToolTip(
+            "Sync-word detector threshold as a fraction of the sync word's "
+            "energy. Lower is stricter (fewer false syncs); higher tolerates "
+            "a noisier or DC-offset symbol stream."
+        )
+        sync_row.addWidget(sync_label)
+        self._sync_threshold_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self._sync_threshold_slider.setRange(*SYNC_THRESHOLD_RANGE)
+        self._sync_threshold_slider.setValue(_sync_ratio_to_slider(DEFAULT_SYNC_THRESHOLD_RATIO))
+        self._sync_threshold_slider.valueChanged.connect(self._on_sync_threshold_changed)
+        sync_row.addWidget(self._sync_threshold_slider, 1)
+        self._sync_threshold_value_label = QtWidgets.QLabel(
+            _format_sync_ratio(DEFAULT_SYNC_THRESHOLD_RATIO)
+        )
+        self._sync_threshold_value_label.setMinimumWidth(48)
+        sync_row.addWidget(self._sync_threshold_value_label)
+        self._sync_threshold_save_button = QtWidgets.QPushButton("Save")
+        self._sync_threshold_save_button.setToolTip(
+            "Write the current value into the settings file's [demod].sync_error_threshold_ratio."
+        )
+        self._sync_threshold_save_button.clicked.connect(self._save_sync_threshold_to_settings)
+        sync_row.addWidget(self._sync_threshold_save_button)
+        root.addLayout(sync_row)
+
         # Collapsible settings panel: a direct-edit form over the single fixed
         # settings file (app.settings_store), resolved preview, extra backend
         # args. Not needed while receiving, so it folds away on Start. There
@@ -387,7 +436,7 @@ class MainWindow(QtWidgets.QMainWindow):
 
         backend_row = QtWidgets.QHBoxLayout()
         self._backend_args = QtWidgets.QLineEdit()
-        self._backend_args.setPlaceholderText("Extra backend args, e.g. --replay capture.cf32 (squelch has its own slider above)")
+        self._backend_args.setPlaceholderText("Extra backend args, e.g. --replay capture.cf32 (squelch / sync thr have sliders above)")
         backend_row.addWidget(QtWidgets.QLabel("Backend:"))
         backend_row.addWidget(self._backend_args, 1)
         panel.addLayout(backend_row)
@@ -506,6 +555,14 @@ class MainWindow(QtWidgets.QMainWindow):
         self._squelch_slider.blockSignals(False)
         self._squelch_value_label.setText(f"{self._squelch_slider.value()} dB")
 
+        sync_ratio = read_demod_value("sync_error_threshold_ratio")
+        if not isinstance(sync_ratio, (int, float)) or sync_ratio <= 0:
+            sync_ratio = DEFAULT_SYNC_THRESHOLD_RATIO
+        self._sync_threshold_slider.blockSignals(True)
+        self._sync_threshold_slider.setValue(_sync_ratio_to_slider(sync_ratio))
+        self._sync_threshold_slider.blockSignals(False)
+        self._sync_threshold_value_label.setText(_format_sync_ratio(self._sync_threshold_ratio()))
+
         self._update_preview()
 
     def _field_text(self, key):
@@ -557,6 +614,8 @@ class MainWindow(QtWidgets.QMainWindow):
         manages_backend = not self._services_only.isChecked()
         self._squelch_slider.setEnabled(manages_backend)
         self._squelch_save_button.setEnabled(manages_backend)
+        self._sync_threshold_slider.setEnabled(manages_backend)
+        self._sync_threshold_save_button.setEnabled(manages_backend)
 
     def _on_squelch_changed(self, value):
         self._squelch_value_label.setText(f"{value} dB")
@@ -568,6 +627,25 @@ class MainWindow(QtWidgets.QMainWindow):
             write_demod_value("squelch_threshold", float(self._squelch_slider.value()))
         except OSError as exc:
             QtWidgets.QMessageBox.warning(self, "Save squelch", f"Could not write settings:\n{exc}")
+            return
+        self._update_preview()
+
+    def _sync_threshold_ratio(self):
+        return _sync_slider_to_ratio(self._sync_threshold_slider.value())
+
+    def _on_sync_threshold_changed(self, position):
+        ratio = _sync_slider_to_ratio(position)
+        self._sync_threshold_value_label.setText(_format_sync_ratio(ratio))
+        if self._running and self.supervisor is not None:
+            self.supervisor.set_sync_threshold_ratio(ratio)
+
+    def _save_sync_threshold_to_settings(self):
+        try:
+            write_demod_value("sync_error_threshold_ratio", self._sync_threshold_ratio())
+        except OSError as exc:
+            QtWidgets.QMessageBox.warning(
+                self, "Save sync threshold", f"Could not write settings:\n{exc}"
+            )
             return
         self._update_preview()
 
@@ -679,11 +757,14 @@ class MainWindow(QtWidgets.QMainWindow):
             for key in self._sdr_field_widgets:
                 self._on_sdr_field_changed(key)
 
-            # The slider is a plain CLI override (not written to the settings
+            # The sliders are plain CLI overrides (not written to the settings
             # file unless Save is clicked), so Start always uses exactly what
-            # it shows, whether or not that has been persisted yet.
-            squelch_args = ["--squelch", str(self._squelch_slider.value())]
-            backend_args = ["--config", str(settings_path()), *squelch_args, *extra_args]
+            # they show, whether or not that has been persisted yet.
+            slider_args = [
+                "--squelch", str(self._squelch_slider.value()),
+                "--sync-threshold-ratio", _format_sync_ratio(self._sync_threshold_ratio()),
+            ]
+            backend_args = ["--config", str(settings_path()), *slider_args, *extra_args]
 
         supervisor = StackSupervisor(
             repo_root=self.repo_root,

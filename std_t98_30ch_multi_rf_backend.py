@@ -114,7 +114,7 @@ class test3(gr.top_block):
         ##################################################
         # 7. Sync Word Correlator Setup
         ##################################################
-        self.sync_error_threshold_ratio = sync_error_threshold_ratio = 0.2
+        self.sync_error_threshold_ratio = sync_error_threshold_ratio = config.demod.sync_error_threshold_ratio
         self.sync_packet_len = sync_packet_len = 192
 
         ##################################################
@@ -251,15 +251,28 @@ class test3(gr.top_block):
         for squelch in self.simple_squelch:
             squelch.set_threshold(threshold_db)
 
+    def set_sync_error_threshold_ratio(self, ratio):
+        """Re-tune the sync-word detector on a running flowgraph.
+
+        The correlator is our own Python block, so this just recomputes its
+        match threshold; the next sample is judged against the new value.
+        """
+        self.sync_error_threshold_ratio = ratio
+        self.sync_word_corr.set_threshold_ratio(ratio)
+
 
 def _run_control_loop(tb, socket_path):
-    """Background thread: apply live squelch changes from the GUI.
+    """Background thread: apply live tuning changes from the GUI.
 
     Connects as a client because the supervisor (server) binds the control
     socket before spawning this process. Exits quietly on disconnect -- the
     supervisor closes the socket right before SIGINT-ing this process anyway.
     """
-    from ipc.message_schema import ControlSquelchPacket
+    from ipc.message_schema import (
+        ControlSquelchPacket,
+        ControlSyncThresholdPacket,
+        decode_control_packet,
+    )
     from ipc.transport.uds_seqpacket import UdsSeqpacketClient
 
     try:
@@ -275,10 +288,16 @@ def _run_control_loop(tb, socket_path):
         if not payload:
             return
         try:
-            packet = ControlSquelchPacket.decode(payload)
+            packet = decode_control_packet(payload)
         except ValueError:
             continue
-        tb.set_squelch_threshold(packet.threshold_db)
+        if isinstance(packet, ControlSquelchPacket):
+            tb.set_squelch_threshold(packet.threshold_db)
+        elif isinstance(packet, ControlSyncThresholdPacket):
+            try:
+                tb.set_sync_error_threshold_ratio(packet.ratio)
+            except ValueError:
+                continue  # a non-positive ratio; keep the current threshold
 
 
 HEALTH_CHECK_INTERVAL_SEC = 5.0
@@ -338,7 +357,7 @@ def _parse_args(argv=None):
     parser.add_argument(
         "--control-socket",
         help="UDS SOCK_SEQPACKET path to receive live control messages on "
-        "(currently: squelch threshold changes). Set by the GUI/launcher's "
+        "(squelch and sync-word threshold changes). Set by the GUI/launcher's "
         "StackSupervisor; not needed when running this script by hand.",
     )
     return parser.parse_args(argv)

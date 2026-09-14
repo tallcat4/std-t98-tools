@@ -46,15 +46,15 @@ class SyncWordCorrelator(gr.sync_block):
         if self.packet_len < self.sync_word_length:
             raise ValueError("packet_len must be >= length of sync_word")
 
-        sync_word_energy = float(np.dot(self.sync_word, self.sync_word))
+        self.sync_word_energy = float(np.dot(self.sync_word, self.sync_word))
         if threshold_ratio is not None:
             self.detection_mode = "correlation"
-            self.match_threshold = sync_word_energy * float(threshold_ratio)
             self.abs_limit = float(abs_limit if abs_limit is not None else 4.0)
+            self.set_threshold_ratio(threshold_ratio)
         else:
             self.detection_mode = "sse"
-            self.match_threshold = sync_word_energy * float(error_threshold_ratio)
             self.abs_limit = None
+            self.set_threshold_ratio(error_threshold_ratio)
 
         self.shift_registers = [np.zeros(self.sync_word_length, dtype=np.float32) for _ in range(self.channel_count)]
         self.collecting = [False] * self.channel_count
@@ -81,6 +81,18 @@ class SyncWordCorrelator(gr.sync_block):
         self.transport.close()
         self.status_publisher.close()
         return True
+
+    def set_threshold_ratio(self, ratio):
+        """Re-derive the match threshold from a new fraction of the sync-word
+        energy. Safe to call from another thread while work() runs: the
+        detector reads match_threshold as a single float per sample, so the
+        change simply takes effect from the next sample on.
+        """
+        ratio = float(ratio)
+        if not (ratio > 0.0):
+            raise ValueError(f"threshold ratio must be positive, got {ratio}")
+        self.threshold_ratio = ratio
+        self.match_threshold = self.sync_word_energy * ratio
 
     def _start_collection(self, channel_index, initial_window):
         self.packet_bufs[channel_index] = np.empty(self.packet_len, dtype=np.float32)

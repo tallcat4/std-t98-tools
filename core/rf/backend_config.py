@@ -117,6 +117,12 @@ class DemodConfig:
 
     squelch_threshold: float = -25.0   # dB
     squelch_alpha: float = 1.0
+    # Sync-word detector sensitivity, as a fraction of the sync word's own
+    # energy (sum of squared symbols). A window whose squared error against
+    # the sync word is at or below energy * ratio counts as a match. Lower is
+    # stricter (fewer false triggers, but a noisy or DC-offset symbol stream
+    # never syncs); higher is looser. 0.2 is the historical hard-coded value.
+    sync_error_threshold_ratio: float = 0.2
 
 
 @dataclass(frozen=True)
@@ -312,6 +318,13 @@ def add_config_arguments(parser) -> None:
         "be checked on an unfamiliar radio: too high and every channel is "
         "muted with no indication why.",
     )
+    parser.add_argument(
+        "--sync-threshold-ratio", type=float,
+        help="Sync-word detector threshold as a fraction of the sync word's "
+        "energy (default 0.2). A symbol window matches when its squared error "
+        "against the sync word is at or below energy * ratio, so lower is "
+        "stricter and higher is looser.",
+    )
 
 
 def apply_cli_overrides(config: BackendConfig, args) -> BackendConfig:
@@ -336,6 +349,9 @@ def apply_cli_overrides(config: BackendConfig, args) -> BackendConfig:
     squelch = getattr(args, "squelch", None)
     if squelch is not None:
         demod_overrides["squelch_threshold"] = squelch
+    sync_threshold_ratio = getattr(args, "sync_threshold_ratio", None)
+    if sync_threshold_ratio is not None:
+        demod_overrides["sync_error_threshold_ratio"] = sync_threshold_ratio
 
     channelizer_overrides: dict[str, Any] = {}
     pfb_channels = getattr(args, "pfb_channels", None)

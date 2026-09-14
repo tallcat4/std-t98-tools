@@ -26,6 +26,7 @@ from ipc.message_schema import (
     STATUS_SOURCE_RF,
     STATUS_SOURCE_SECRET,
     ControlSquelchPacket,
+    ControlSyncThresholdPacket,
     StatusPacket,
 )
 from ipc.transport.uds_seqpacket import (
@@ -578,6 +579,13 @@ class StackSupervisor:
         if self._control_server is None:
             return False
         return self._control_server.send(ControlSquelchPacket(threshold_db=threshold_db).encode())
+
+    def set_sync_threshold_ratio(self, ratio: float) -> bool:
+        """Push a live sync-word detector threshold (fraction of sync-word
+        energy) to the running backend. Same caveats as set_squelch."""
+        if self._control_server is None:
+            return False
+        return self._control_server.send(ControlSyncThresholdPacket(ratio=ratio).encode())
 
     def stop(self):
         if self._status_receiver is not None:

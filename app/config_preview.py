@@ -63,6 +63,7 @@ def preview_config(path) -> ConfigPreview:
         f"Bandwidth   : {f'{bandwidth:,.0f} Hz' if bandwidth else '(device default)'}",
         f"Gain        : {gain_desc}",
         f"Squelch     : {config.demod.squelch_threshold:g} dB",
+        f"Sync thr    : {config.demod.sync_error_threshold_ratio:g} (of sync-word energy)",
         f"Channels    : {config.channelizer.num_channels}"
         f"  (bin width err {rates.bin_width_error_hz:+.3f} Hz)",
     ]

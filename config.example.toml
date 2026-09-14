@@ -85,3 +85,12 @@ squelch_threshold = -25.0
 
 # Squelch power-averaging coefficient (1.0 = no averaging).
 squelch_alpha = 1.0
+
+# Sync-word detector threshold, as a fraction of the sync word's own energy
+# (sum of squared symbols). A 10-symbol window matches when its squared error
+# against the sync word is at or below energy * ratio. Lower is stricter
+# (fewer false syncs, but a noisy or DC-offset symbol stream never syncs);
+# higher is looser. The desktop GUI's "Sync thr" slider adjusts this live;
+# with Debug metrics on, each channel's "thr=" is the resulting absolute
+# threshold and "best=" the closest any window has come to it.
+sync_error_threshold_ratio = 0.2

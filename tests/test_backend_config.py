@@ -130,6 +130,31 @@ class SquelchTest(unittest.TestCase):
         self.assertEqual(config.sdr.device_args, "")
 
 
+class SyncThresholdTest(unittest.TestCase):
+    def test_default_matches_the_historical_hard_coded_value(self):
+        self.assertEqual(BackendConfig().demod.sync_error_threshold_ratio, 0.2)
+
+    def test_cli_overrides_sync_threshold_ratio(self):
+        import argparse
+
+        parser = argparse.ArgumentParser()
+        add_config_arguments(parser)
+        args = parser.parse_args(["--sync-threshold-ratio", "0.35"])
+        config = apply_cli_overrides(BackendConfig(), args)
+        self.assertEqual(config.demod.sync_error_threshold_ratio, 0.35)
+        # The other [demod] value is untouched by an unrelated override.
+        self.assertEqual(config.demod.squelch_threshold, -25.0)
+
+    def test_sync_threshold_ratio_survives_a_config_file(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "cfg.toml"
+            path.write_text("[demod]\nsync_error_threshold_ratio = 0.3\n", encoding="utf-8")
+            config = load_config_file(path)
+        self.assertEqual(config.demod.sync_error_threshold_ratio, 0.3)
+
+
 class BandwidthTest(unittest.TestCase):
     def test_default_follows_sample_rate(self):
         # A USRP otherwise sits at its full front-end bandwidth no matter how

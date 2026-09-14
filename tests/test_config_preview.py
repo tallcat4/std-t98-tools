@@ -34,10 +34,12 @@ def test_preview_resolves_uhd_config(tmp_path):
         freq_err_offset = 1030
         [demod]
         squelch_threshold = -40
+        sync_error_threshold_ratio = 0.3
     """)
     result = preview_config(str(path))
     assert result.ok is True
     assert "TX/RX" in result.summary
+    assert "Sync thr    : 0.3" in result.summary
     assert "PGA" in result.summary
     assert "+1030 Hz" in result.summary
     assert "2,000,000 Hz" in result.summary

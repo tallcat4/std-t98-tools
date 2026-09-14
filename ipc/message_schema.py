@@ -12,6 +12,7 @@ MSG_TYPE_STATUS = 3
 MSG_TYPE_SECRET_CRACK_REQUEST = 4
 MSG_TYPE_SECRET_CRACK_RESULT = 5
 MSG_TYPE_CONTROL_SQUELCH = 6
+MSG_TYPE_CONTROL_SYNC_THRESHOLD = 7
 
 FRAME_FLAG_SYNC_DETECTED = 1 << 0
 FRAME_FLAG_CLIPPED = 1 << 1
@@ -40,6 +41,10 @@ STATUS_HEADER = struct.Struct("<HHIQHHI")
 SECRET_REQUEST_HEADER = struct.Struct("<HHIHHHBB")
 SECRET_RESULT_HEADER = struct.Struct("<HHIHHHBB")
 CONTROL_SQUELCH_HEADER = struct.Struct("<HHf")
+CONTROL_SYNC_THRESHOLD_HEADER = struct.Struct("<HHf")
+# Every control packet starts with (version, msg_type) so the backend's
+# control loop can pick the decoder before parsing the rest.
+CONTROL_PREFIX = struct.Struct("<HH")
 
 SECRET_BURST_BYTES_AMBE_2450 = VOICE_BURST_BLOCK_BYTES_AMBE_2450 * 4
 
@@ -353,3 +358,54 @@ class ControlSquelchPacket:
             raise ValueError(f"Unsupported message type: {msg_type}")
 
         return cls(threshold_db=threshold_db)
+
+
+@dataclass(frozen=True)
+class ControlSyncThresholdPacket:
+    """GUI -> backend: set the sync-word detector threshold live.
+
+    ``ratio`` is the match threshold as a fraction of the sync word's own
+    energy (see core.rf.sync_word_correlator), the same quantity as
+    ``[demod].sync_error_threshold_ratio`` / ``--sync-threshold-ratio``.
+    """
+
+    ratio: float
+
+    def encode(self) -> bytes:
+        return CONTROL_SYNC_THRESHOLD_HEADER.pack(
+            MESSAGE_VERSION,
+            MSG_TYPE_CONTROL_SYNC_THRESHOLD,
+            self.ratio,
+        )
+
+    @classmethod
+    def decode(cls, payload: bytes):
+        if len(payload) != CONTROL_SYNC_THRESHOLD_HEADER.size:
+            raise ValueError("Control sync threshold packet size mismatch.")
+
+        version, msg_type, ratio = CONTROL_SYNC_THRESHOLD_HEADER.unpack(payload)
+        if version != MESSAGE_VERSION:
+            raise ValueError(f"Unsupported message version: {version}")
+        if msg_type != MSG_TYPE_CONTROL_SYNC_THRESHOLD:
+            raise ValueError(f"Unsupported message type: {msg_type}")
+
+        return cls(ratio=ratio)
+
+
+_CONTROL_DECODERS = {
+    MSG_TYPE_CONTROL_SQUELCH: ControlSquelchPacket.decode,
+    MSG_TYPE_CONTROL_SYNC_THRESHOLD: ControlSyncThresholdPacket.decode,
+}
+
+
+def decode_control_packet(payload: bytes):
+    """Decode any control-socket packet into its dataclass by message type."""
+    if len(payload) < CONTROL_PREFIX.size:
+        raise ValueError("Control packet too short.")
+    version, msg_type = CONTROL_PREFIX.unpack_from(payload)
+    if version != MESSAGE_VERSION:
+        raise ValueError(f"Unsupported message version: {version}")
+    decoder = _CONTROL_DECODERS.get(msg_type)
+    if decoder is None:
+        raise ValueError(f"Unsupported control message type: {msg_type}")
+    return decoder(payload)
