@@ -1,4 +1,16 @@
-# std-t98-tools
+# std-t98-tools (archive)
+
+この統合ツールは保守を終了し、開発・デバッグ用の機能を独立した3つのCLIへ分けました。
+
+- [std-t98-receiver](https://github.com/tallcat4/std-t98-receiver): Windows + RTL-SDRで指定チャネルの `.burst` を保存。DSPはSPEAR由来。
+- [std-t98-cracker](https://github.com/tallcat4/std-t98-cracker): ファイルから明示的に線形/AI鍵解析、指定鍵での変換。
+- [std-t98-vocode](https://github.com/tallcat4/std-t98-vocode): `.burst` / `.ambe` からWAVへの変換。
+
+新しいツールはそれぞれ単機能です。GUI、受信から鍵探索・音声化までの自動連携は行いません。
+このリポジトリには従来コード、ドキュメント、コミット履歴を保存します。
+以下は旧バージョンの説明です。
+
+---
 
 ARIB STD-T98(デジタル簡易無線、351 MHz 帯)を USRP で受信し、30 チャンネルを同時に復調・復号して音声を再生する GNU Radio / Python ツール群です。
 
